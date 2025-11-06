@@ -37,44 +37,39 @@
   become: true
   when: ansible_facts['os_family'] == 'RedHat'
 
-# 2) Definir nombre y path de ISO Ubuntu (con defaults robustos)
-- name: Nombre y path de ISO Ubuntu
+# 2) Normalizar variables de ISO y crear banderas (evita precedencia de filtros)
+- name: Calcular banderas de origen de ISO
   set_fact:
-    ubuntu_iso_filename: >-
-      {{
-        ( (ubuntu_iso_url | default('')) | length ) > 0
-        | ternary( (ubuntu_iso_url | basename),
-                   (ubuntu_iso_local | basename) )
-      }}
-    ubuntu_iso_local_path: >-
-      {{
-        ( (ubuntu_iso_local | default('')) | length ) > 0
-        | ternary( ubuntu_iso_local,
-                   (lookup('env','HOME') + '/.cache/ansible/' + (ubuntu_iso_url | basename))
-                 )
-      }}
+    use_url: "{{ (ubuntu_iso_url   | default('') | string) | length > 0 }}"
+    use_local: "{{ (ubuntu_iso_local | default('') | string) | length > 0 }}"
+    use_existing: "{{ (existing_datastore_iso | default('') | string) | length > 0 }}"
 
 - name: Validar ISO de Ubuntu disponible (URL/local o datastore existente)
   assert:
     that:
-      - ((ubuntu_iso_url | default('')) | length > 0)
-        or ((ubuntu_iso_local | default('')) | length > 0)
-        or ((existing_datastore_iso | default('')) | length > 0)
+      - use_url or use_local or use_existing
     fail_msg: "Define ubuntu_iso_url o ubuntu_iso_local, o bien existing_datastore_iso con la ruta '[DATASTORE] carpeta/archivo.iso'."
 
-# 3) Descargar ISO si hay URL (solo si no usas existing_datastore_iso)
+# 3) Definir nombre y path de ISO Ubuntu (según banderas)
+- name: Nombre y path de ISO Ubuntu
+  set_fact:
+    ubuntu_iso_filename: "{{ (ubuntu_iso_url | basename) if use_url else (ubuntu_iso_local | basename) }}"
+    ubuntu_iso_local_path: "{{ (ubuntu_iso_local) if use_local else (lookup('env','HOME') + '/.cache/ansible/' + (ubuntu_iso_url | basename)) }}"
+  when: not use_existing
+
+# 4) Descargar ISO si hay URL (solo si no usas existing_datastore_iso)
 - name: Descargar ISO Ubuntu si hay URL
   delegate_to: localhost
   when:
-    - ubuntu_iso_url | default('') | length > 0
-    - (existing_datastore_iso | default('')) | length == 0
+    - use_url
+    - not use_existing
   get_url:
     url: "{{ ubuntu_iso_url }}"
     dest: "{{ ubuntu_iso_local_path }}"
     mode: "0644"
     force: no
 
-# 4) Subir ISO Ubuntu al datastore (solo si no existe ya en datastore)
+# 5) Subir ISO Ubuntu al datastore (solo si no existe ya en datastore)
 - name: Subir ISO Ubuntu al datastore
   community.vmware.vsphere_copy:
     hostname: "{{ vcenter_hostname }}"
@@ -85,9 +80,9 @@
     datacenter: "{{ vcenter_datacenter }}"
     datastore: "{{ vcenter_datastore }}"
     path: "{{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
-  when: (existing_datastore_iso | default('')) | length == 0
+  when: not use_existing
 
-# 5) Preparar seed cloud-init local
+# 6) Preparar seed cloud-init local
 - name: Preparar seed cloud-init local
   delegate_to: localhost
   file:
@@ -125,7 +120,7 @@
       vars:
         hostname: "{{ seed_vm_name }}"
 
-# 6) Crear seed ISO (NoCloud) con mkisofs
+# 7) Crear seed ISO (NoCloud) con mkisofs
 - name: Crear seed ISO (NoCloud) con mkisofs
   delegate_to: localhost
   command:
@@ -136,7 +131,7 @@
       /tmp/seed-{{ seed_vm_name }}/meta-data
     creates: "/tmp/seed-{{ seed_vm_name }}.iso"
 
-# 7) Subir seed ISO al datastore
+# 8) Subir seed ISO al datastore
 - name: Subir seed ISO al datastore
   community.vmware.vsphere_copy:
     hostname: "{{ vcenter_hostname }}"
@@ -148,7 +143,7 @@
     datastore: "{{ vcenter_datastore }}"
     path: "{{ datastore_iso_dir }}/seed-{{ seed_vm_name }}.iso"
 
-# 8) Crear VM seed y montar ISOs
+# 9) Crear VM seed y montar ISOs
 - name: Crear VM seed y montar ISOs
   community.vmware.vmware_guest:
     hostname: "{{ vcenter_hostname }}"
@@ -181,11 +176,11 @@
       - type: iso
         iso_path: >-
           {{
-            (existing_datastore_iso | default('')) | length > 0
-            | ternary(
-                existing_datastore_iso,
-                "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
-              )
+            use_existing
+              | ternary(
+                  existing_datastore_iso,
+                  "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
+                )
           }}
         controller_number: 0
         unit_number: 0
@@ -195,12 +190,12 @@
         unit_number: 1
     wait_for_ip_address: no
 
-# 9) Espera simple a que finalice autoinstall (ajusta según tu entorno)
+# 10) Espera simple a que finalice autoinstall (ajusta según tu entorno)
 - name: Espera razonable a que finalice autoinstall
   pause:
     minutes: 15
 
-# 10) Desmontar CDROMs y apagar VM seed
+# 11) Desmontar CDROMs y apagar VM seed
 - name: Desmontar CDROMs
   community.vmware.vmware_guest:
     hostname: "{{ vcenter_hostname }}"
