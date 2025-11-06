@@ -1,5 +1,5 @@
 ---
 collections:
-  - name: community.vmware      # módulos vmware_guest, vsphere_copy, etc.
-  - name: community.general     # docker_container, etc.
-  - name: vmware.vmware         # módulos para convertir VM -> Template (carpeta/contenido)
+  - name: community.vmware
+  - name: community.general
+  - name: vmware.vmware

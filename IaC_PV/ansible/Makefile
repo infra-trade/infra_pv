@@ -1,7 +1,7 @@
 .PHONY: deps template convert provision configure all
 
 deps:
-	ansible-galaxy collection install -r collections/requirements.yml
+	ansible-galaxy collection install -r collections/requirements.yml --force
 
 template:
 	ansible-playbook playbooks/00-build-template.yml --ask-vault-pass
