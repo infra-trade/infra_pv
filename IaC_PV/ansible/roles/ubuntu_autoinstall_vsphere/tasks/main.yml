@@ -37,39 +37,69 @@
   become: true
   when: ansible_facts['os_family'] == 'RedHat'
 
-# 2) Normalizar variables de ISO y crear banderas (evita precedencia de filtros)
+# 2) Normalizar variables y banderas (evita problemas de tipos)
+- name: Normalizar variables de ISO (strings)
+  set_fact:
+    _iso_url: "{{ ubuntu_iso_url | default('') | string }}"
+    _iso_local: "{{ ubuntu_iso_local | default('') | string }}"
+    _iso_existing: "{{ existing_datastore_iso | default('') | string }}"
+    _iso_dir: "{{ datastore_iso_dir | default('iso') | string }}"
+
 - name: Calcular banderas de origen de ISO
   set_fact:
-    use_url: "{{ (ubuntu_iso_url   | default('') | string) | length > 0 }}"
-    use_local: "{{ (ubuntu_iso_local | default('') | string) | length > 0 }}"
-    use_existing: "{{ (existing_datastore_iso | default('') | string) | length > 0 }}"
+    use_url: "{{ (_iso_url | length) > 0 }}"
+    use_local: "{{ (_iso_local | length) > 0 }}"
+    use_existing: "{{ (_iso_existing | length) > 0 }}"
 
-- name: Validar ISO de Ubuntu disponible (URL/local o datastore existente)
+- name: Validar que exista alguna fuente de ISO
   assert:
     that:
       - use_url or use_local or use_existing
-    fail_msg: "Define ubuntu_iso_url o ubuntu_iso_local, o bien existing_datastore_iso con la ruta '[DATASTORE] carpeta/archivo.iso'."
+    fail_msg: "Define ubuntu_iso_url o ubuntu_iso_local, o bien existing_datastore_iso ('[DATASTORE] carpeta/archivo.iso')."
 
-# 3) Definir nombre y path de ISO Ubuntu (según banderas)
-- name: Nombre y path de ISO Ubuntu
+# 3) Preparar nombre y path del ISO (cuando NO usamos existing)
+- name: Inicializar variables de ISO calculadas
   set_fact:
-    ubuntu_iso_filename: "{{ (ubuntu_iso_url | basename) if use_url else (ubuntu_iso_local | basename) }}"
-    ubuntu_iso_local_path: "{{ (ubuntu_iso_local) if use_local else (lookup('env','HOME') + '/.cache/ansible/' + (ubuntu_iso_url | basename)) }}"
+    ubuntu_iso_filename: ""
+    ubuntu_iso_local_path: ""
   when: not use_existing
 
-# 4) Descargar ISO si hay URL (solo si no usas existing_datastore_iso)
+- name: Calcular filename/local_path desde URL
+  set_fact:
+    ubuntu_iso_filename: "{{ _iso_url | basename }}"
+    ubuntu_iso_local_path: "{{ lookup('env','HOME') }}/.cache/ansible/{{ _iso_url | basename }}"
+  when:
+    - not use_existing
+    - use_url
+
+- name: Calcular filename/local_path desde ruta local
+  set_fact:
+    ubuntu_iso_filename: "{{ _iso_local | basename }}"
+    ubuntu_iso_local_path: "{{ _iso_local }}"
+  when:
+    - not use_existing
+    - use_local
+
+- name: Asegurar que filename/local_path quedaron definidos si no usamos existing
+  assert:
+    that:
+      - ubuntu_iso_filename | length > 0
+      - ubuntu_iso_local_path | length > 0
+  when: not use_existing
+
+# 4) Descargar ISO si viene por URL
 - name: Descargar ISO Ubuntu si hay URL
   delegate_to: localhost
   when:
     - use_url
     - not use_existing
   get_url:
-    url: "{{ ubuntu_iso_url }}"
+    url: "{{ _iso_url }}"
     dest: "{{ ubuntu_iso_local_path }}"
     mode: "0644"
     force: no
 
-# 5) Subir ISO Ubuntu al datastore (solo si no existe ya en datastore)
+# 5) Subir ISO Ubuntu al datastore (si no usamos el existente)
 - name: Subir ISO Ubuntu al datastore
   community.vmware.vsphere_copy:
     hostname: "{{ vcenter_hostname }}"
@@ -79,7 +109,7 @@
     src: "{{ ubuntu_iso_local_path }}"
     datacenter: "{{ vcenter_datacenter }}"
     datastore: "{{ vcenter_datastore }}"
-    path: "{{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
+    path: "{{ _iso_dir }}/{{ ubuntu_iso_filename }}"
   when: not use_existing
 
 # 6) Preparar seed cloud-init local
@@ -109,7 +139,7 @@
         mode: "0644"
       vars:
         hostname: "{{ seed_vm_name }}"
-        host_ip: "192.168.5.250"   # IP temporal para seed (no usada luego)
+        host_ip: "192.168.5.250"   # IP temporal para seed
         mask_bits: "{{ mask_bits }}"
         ssh_key: "{{ ssh_pubkey_content }}"
     - name: meta-data
@@ -141,7 +171,7 @@
     src: "/tmp/seed-{{ seed_vm_name }}.iso"
     datacenter: "{{ vcenter_datacenter }}"
     datastore: "{{ vcenter_datastore }}"
-    path: "{{ datastore_iso_dir }}/seed-{{ seed_vm_name }}.iso"
+    path: "{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
 
 # 9) Crear VM seed y montar ISOs
 - name: Crear VM seed y montar ISOs
@@ -178,14 +208,14 @@
           {{
             use_existing
               | ternary(
-                  existing_datastore_iso,
-                  "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
+                  _iso_existing,
+                  "[{{ vcenter_datastore }}] {{ _iso_dir }}/{{ ubuntu_iso_filename }}"
                 )
           }}
         controller_number: 0
         unit_number: 0
       - type: iso
-        iso_path: "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/seed-{{ seed_vm_name }}.iso"
+        iso_path: "[{{ vcenter_datastore }}] {{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
         controller_number: 0
         unit_number: 1
     wait_for_ip_address: no
