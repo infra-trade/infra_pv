@@ -1,7 +1,10 @@
 ---
-# Defaults del rol (robusto aunque falten group_vars)
+# === ISO (defaults) ===
 ubuntu_iso_url: ""
 ubuntu_iso_local: ""
 datastore_iso_dir: "iso"
-# Si el ISO ya existe en el datastore, define aquí la ruta completa [DATASTORE] carpeta/archivo.iso
 existing_datastore_iso: ""
+
+# === Nombres (defaults) ===
+seed_vm_name: "ubuntu-seed-24-04"
+template_name: "ubuntu-24-04-template"
