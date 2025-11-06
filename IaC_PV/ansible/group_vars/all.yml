@@ -1,5 +1,5 @@
 # === vCenter (tus valores) ===
-vcenter_hostname: "192.168.5.151"
+vcenter_hostname: "192.168.5.150"
 vcenter_datacenter: "POPULAR VALORES"
 vcenter_cluster: "PV-CLUSTER"
 vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
@@ -23,9 +23,9 @@ vm_disk_gb: 120
 
 # === Red ===
 guest_domain: "localdomain"
-guest_gateway: "192.168.5.1"
+guest_gateway: "192.168.5.252"
 guest_netmask: "255.255.255.0"
-guest_dns_servers: ["192.168.5.1", "8.8.8.8"]
+guest_dns_servers: ["192.168.10.2", "8.8.8.8"]
 net_interface: "ens160"
 
 # === Ubuntu ISO ===
