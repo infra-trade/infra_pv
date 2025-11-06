@@ -1,40 +1,124 @@
-# === vCenter (tus valores) ===
+---
+##############################
+# Conexión a vCenter
+##############################
+
+# Endpoint de vCenter
 vcenter_hostname: "192.168.5.150"
-vcenter_datacenter: "POPULAR VALORES"
-vcenter_cluster: "PV-CLUSTER"
-vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
-vcenter_network: "VLAN-5"
+vcenter_port: 443
 vcenter_validate_certs: false
 
-# Usuario/clave pueden venir de vault.yml:
-# vcenter_username: "{{ vault_vcenter_username }}"
-# vcenter_password: "{{ vault_vcenter_password }}"
+# Usuario/clave vienen del vault (NO poner la clave en texto plano aquí)
+vcenter_username: "{{ vault_vcenter_username }}"
+vcenter_password: "{{ vault_vcenter_password }}"
 
-vm_folder: "Infra"
+##############################
+# Inventario vSphere
+##############################
 
-# === Template / nombres ===
-seed_vm_name: "ubuntu-seed-24-04"
-template_name: "ubuntu-24-04-template"
+# Debe coincidir EXACTO con el nombre en vCenter
+vcenter_datacenter: "POPULAR_VALORES"
 
-# === Especificaciones de la VM seed ===
-vm_cpu: 3
-vm_ram_mb: 32768
-vm_disk_gb: 120
+# Cluster donde se crean VMs / template
+vcenter_cluster: "PV-CLUSTER"
 
-# === Red ===
-guest_domain: "localdomain"
-guest_gateway: "192.168.5.252"
-guest_netmask: "255.255.255.0"
-guest_dns_servers: ["192.168.10.2", "8.8.8.8"]
-net_interface: "ens160"
+# Datastore donde está la carpeta ISOS y donde subimos el seed ISO
+vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
 
-# === Ubuntu ISO ===
-ubuntu_iso_url: ""
-ubuntu_iso_local: ""
+# Portgroup / Network para las VMs
+vcenter_network: "VLAN-5"
+
+# Carpeta dentro del datastore (no lleva / inicial)
 datastore_iso_dir: "ISOS"
-existing_datastore_iso: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.3-live-server-amd64.iso"
 
-# === SSH ===
-ssh_pubkey_path: "~/.ssh/id_ed25519.pub"
-disable_password_ssh: true
-linux_user: "ubuntu"
+# (Opcional) Carpeta lógica de VMs dentro del datacenter
+vm_folder: "PV_IaC"
+
+##############################
+# Ubuntu ISO / autoinstall
+##############################
+
+# Opción 1: descargar desde Internet (lo estamos usando así)
+ubuntu_iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04.1-live-server-amd64.iso"
+
+# Opción 2: usar ISO ya existente en el datastore (si la tuvieras)
+# ejemplo: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.3-live-server-amd64.iso"
+ubuntu_iso_existing: ""
+
+# Opción 3: ruta local en el host Ansible (si quisieras subirla desde ahí)
+ubuntu_iso_local: ""
+
+##############################
+# VM seed (template base Ubuntu)
+##############################
+
+# Nombre de la VM seed que se creará y luego se marcará como template
+seed_vm_name: "ubuntu-seed-24-04"
+seed_vm_folder: "{{ vm_folder }}"
+
+# Hardware de la seed (base para tus futuras VMs)
+seed_vm_cpu: 3
+seed_vm_memory_mb: 32768        # 32 GB
+seed_vm_disk_gb: 120
+
+# Configuración de red de la seed durante autoinstall
+# Usa una IP libre en tu red para la instalación. Luego el template ya no la usará fija.
+guest_ip: "192.168.5.80"
+guest_netmask: "255.255.255.0"
+guest_gateway: "192.168.5.1"
+guest_dns: "192.168.5.1"
+guest_domain: "popvalores.com"
+
+##############################
+# Usuario Linux dentro del template
+##############################
+
+linux_user: "ansible"
+linux_user_gecos: "Ansible Admin"
+linux_user_shell: "/bin/bash"
+
+# Clave pública usada para acceder por SSH (desde tu host Ansible)
+ssh_pubkey_path: "/home/ansible/.ssh/id_rsa.pub"
+
+# Endurecimiento básico
+allow_ssh_password_auth: false
+allow_root_ssh: false
+
+##############################
+# cloud-init / regionalización
+##############################
+
+cloud_init_timezone: "America/Mexico_City"
+cloud_init_locale: "es_MX.UTF-8"
+
+##############################
+# Futuros nodos infra
+##############################
+# Estos se usarán en el playbook que clone desde el template.
+
+infra_vms:
+  - name: "infra-master"
+    ip: "192.168.5.85"
+  - name: "infra-nodo1"
+    ip: "192.168.5.86"
+  - name: "infra-nodo2"
+    ip: "192.168.5.87"
+
+infra_vm_cpu: 3
+infra_vm_memory_mb: 32768       # 32 GB
+infra_vm_disk_gb: 120
+infra_vm_network: "{{ vcenter_network }}"
+infra_vm_folder: "{{ vm_folder }}"
+infra_vm_datastore: "{{ vcenter_datastore }}"
+infra_vm_cluster: "{{ vcenter_cluster }}"
+
+##############################
+# Otros toggles de rol (seguros por defecto)
+##############################
+
+# Si true, el rol generará una llave SSH si la ruta no existe.
+# Como ya la tienes creada, lo dejamos en false.
+ssh_generate_if_missing: false
+
+# Control para usar solo seed ISO (sin ISO de instalación), normalmente false.
+use_seed_only: false
