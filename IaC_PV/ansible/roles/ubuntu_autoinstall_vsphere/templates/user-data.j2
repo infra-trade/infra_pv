@@ -18,40 +18,40 @@ disable_root: true
 package_update: true
 package_upgrade: false
 
-# Configuración de red:
-# Si defines guest_ip/guest_gateway/guest_dns/_prefix se deja estática; de lo contrario usa DHCP.
-% if guest_ip is defined and (guest_ip | string | length) > 0 and _prefix is defined and ( _prefix | int ) > 0 and guest_gateway is defined and (guest_gateway | string | length) > 0
+{% set has_static = (
+    guest_ip is defined and (guest_ip | string | length) > 0
+    and _prefix is defined and (_prefix | int) > 0
+    and guest_gateway is defined and (guest_gateway | string | length) > 0
+) %}
+
+{% if has_static %}
 network:
   version: 2
   ethernets:
-    # Nota: ajusta el nombre si tu NIC en ESXi es diferente (ens192, ens160, etc.).
-    # Puedes sobreescribir con 'guest_nic_name' en group_vars si lo necesitas.
     {{ guest_nic_name | default('ens192') }}:
       addresses:
         - {{ guest_ip }}/{{ _prefix }}
       gateway4: {{ guest_gateway }}
       nameservers:
         addresses:
-% if guest_dns is defined and guest_dns | length > 0
+{% if guest_dns is defined and guest_dns | length > 0 %}
 {% for d in guest_dns %}
           - {{ d }}
 {% endfor %}
-% else
+{% else %}
           - 8.8.8.8
           - 1.1.1.1
-% endif
-% else
-# Sin parámetros de red => DHCP
+{% endif %}
+{% else %}
+# Sin parámetros completos de red -> usar DHCP
 network:
   version: 2
   ethernets:
     {{ guest_nic_name | default('ens192') }}:
       dhcp4: true
-% endif
+{% endif %}
 
-# Archivos opcionales que quieras escribir al aprovisionar
 write_files: []
 
-# Comandos que correrán al final del primer arranque
 runcmd:
   - [ cloud-init, status, --wait ]
