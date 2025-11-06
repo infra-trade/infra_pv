@@ -6,24 +6,25 @@
   vars_files:
     - ../vault.yml
 
-  # 👉 Usaremos un venv propio para evitar PEP 668
   vars:
     vmware_venv: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
-    ansible_python_interpreter: "{{ vmware_venv + '/bin/python3' }}"
+    venv_python: "{{ vmware_venv + '/bin/python3' }}"
+
+  # OJO: NO fijamos ansible_python_interpreter aquí aún
 
   pre_tasks:
     - name: Crear venv para módulos VMware (si no existe)
       delegate_to: localhost
       become: false
-      command:
+      ansible.builtin.command:
         cmd: "python3 -m venv {{ vmware_venv }}"
       args:
-        creates: "{{ vmware_venv }}/bin/python3"
+        creates: "{{ venv_python }}"
 
     - name: Actualizar pip en el venv
       delegate_to: localhost
       become: false
-      pip:
+      ansible.builtin.pip:
         name: pip
         state: latest
         virtualenv: "{{ vmware_venv }}"
@@ -31,9 +32,14 @@
     - name: Instalar pyvmomi en el venv
       delegate_to: localhost
       become: false
-      pip:
+      ansible.builtin.pip:
         name: pyvmomi
         virtualenv: "{{ vmware_venv }}"
+
+    # Ahora que el venv existe y tiene pyvmomi, cambiamos el intérprete
+    - name: Usar el Python del venv para el resto del play
+      set_fact:
+        ansible_python_interpreter: "{{ venv_python }}"
 
   roles:
     - role: ubuntu_autoinstall_vsphere
