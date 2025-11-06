@@ -5,25 +5,25 @@
 # Endpoint de vCenter
 vcenter_hostname: "192.168.5.150"
 
-# Usuario de servicio en vCenter (la contraseña va en vault.yml)
+# Usuario de servicio en vCenter
 vcenter_username: "ansible_svc@vsphere.local"
 
-# Nombre EXACTO del Datacenter en vCenter
+# Datacenter EXACTO
 vcenter_datacenter: "POPULAR_VALORES"
 
-# Nombre EXACTO del datastore donde subimos ISOs
+# Datastore EXACTO
 vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
 
 # Cluster donde se desplegarán las VMs
 vcenter_cluster: "PV-CLUSTER"
 
-# Portgroup / Network para las VMs
+# Portgroup / Network
 vcenter_network: "VLAN-5"
 
-# Certs del vCenter (false porque seguramente es self-signed)
+# Certificados del vCenter (false si es self-signed)
 vcenter_validate_certs: false
 
-# Carpeta dentro del datastore para las ISOs
+# Carpeta dentro del datastore para ISOs
 datastore_iso_dir: "ISOS"
 
 # =========================
@@ -32,14 +32,11 @@ datastore_iso_dir: "ISOS"
 
 seed_vm_name: "ubuntu-seed-24-04"
 
-# Usuario Linux dentro de la seed/template
 linux_user: "ansible"
 linux_user_fullname: "Ansible Admin"
 
-# Llave pública para acceso SSH desde tu nodo Ansible
 ssh_pubkey_path: "/home/ansible/.ssh/id_rsa.pub"
 
-# Config de red de la seed (puedes ajustarla luego)
 guest_ip: "192.168.5.85"
 guest_netmask: "255.255.255.0"
 guest_gateway: "192.168.5.1"
@@ -48,11 +45,7 @@ guest_dns:
   - "1.1.1.1"
 
 # =========================
-# ISO de Ubuntu
+# ISO Ubuntu
 # =========================
 
-# Descarga automática desde Internet si no existe localmente
 ubuntu_iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04.1-live-server-amd64.iso"
-
-# Si algún día quieres usar una ISO ya subida al datastore, descomenta y ajusta:
-# ubuntu_iso_existing_datastore_path: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.1-live-server-amd64.iso"
