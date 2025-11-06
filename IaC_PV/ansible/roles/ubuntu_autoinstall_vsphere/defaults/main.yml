@@ -15,14 +15,18 @@ seed_vm_name: "ubuntu-seed-24-04"
 template_name: "ubuntu-24-04-template"
 
 # --- SSH (solo keys) ---
-ssh_pubkey_path: "~/.ssh/id_rsa.pub"  # ruta por defecto si no se define en group_vars
+# Ruta por defecto si no se define en group_vars; se generará si no existe y auto_create_ssh_key = true
+ssh_pubkey_path: "~/.ssh/id_ed25519.pub"
+auto_create_ssh_key: true         # si no existe, el rol la generará
+ssh_key_type: "ed25519"           # ed25519 (recomendado) o rsa
+ssh_key_bits: 4096                # si usas rsa, se usa este tamaño
 
 # --- Red (defaults mínimos por si faltan en group_vars) ---
 net_interface: "ens160"
 guest_netmask: "255.255.255.0"
 guest_gateway: "192.168.5.252"
 guest_dns_servers:
-  - "192.168.10.2"
+  - "8.8.8.8"
 
 # --- Hardware por defecto de la seed (por si no se define en group_vars) ---
 vm_cpu: 3
