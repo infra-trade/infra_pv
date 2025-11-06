@@ -279,7 +279,6 @@
     port: 443
     datacenter: "{{ vcenter_datacenter }}"
     datastore: "{{ vcenter_datastore }}"
-    datastore_name: "{{ vcenter_datastore }}"
     path: "{{ _iso_dir }}"          # sin "/" inicial
     state: directory
   register: _mk_dir
@@ -297,7 +296,6 @@
     src: "/tmp/seed-{{ seed_vm_name }}.iso"
     datacenter: "{{ vcenter_datacenter }}"
     datastore: "{{ vcenter_datastore }}"
-    datastore_name: "{{ vcenter_datastore }}"
     path: "{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
 
 # 12) Crear VM seed y montar ISOs
