@@ -1,0 +1,76 @@
+---
+- name: Crear VM base Ubuntu 24.04 usando autoinstall + seed ISO
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    vm_name: "ubuntu-24-04-base"
+    vm_cpu: 3
+    vm_ram_mb: 32768       # 32 GB
+    vm_disk_gb: 120
+    vm_network: "{{ vcenter_network }}"
+    # IMPORTANTE: esta IP es solo para la VM base durante autoinstall.
+    # La puedes ajustar como una IP libre de tu red.
+    vm_ip: "192.168.5.80"
+    vm_netmask: "255.255.255.0"
+    vm_gw: "192.168.5.252"
+    vm_dns: ["192.168.10.2", "192.168.10.50"]
+
+    # Rutas en datastore
+    iso_datastore: "{{ vcenter_datastore }}"
+    iso_folder: "{{ datastore_iso_dir }}"
+    ubuntu_iso_name: "ubuntu-24.04.1-live-server-amd64.iso"
+    seed_iso_name: "seed-ubuntu-seed-24-04.iso"
+
+  tasks:
+    - name: Crear VM base para autoinstall
+    - name: Crear VM base para autoinstall
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        cluster: "{{ vcenter_cluster }}"
+        name: "{{ vm_name }}"
+        state: poweredon
+        guest_id: ubuntu64Guest
+        disk:
+          - size_gb: "{{ vm_disk_gb }}"
+            type: thin
+            datastore: "{{ vcenter_datastore }}"
+        hardware:
+          memory_mb: "{{ vm_ram_mb }}"
+          num_cpus: "{{ vm_cpu }}"
+        networks:
+          - name: "{{ vm_network }}"
+            type: static
+            ip: "{{ vm_ip }}"
+            netmask: "{{ vm_netmask }}"
+            gateway: "{{ vm_gw }}"
+            dns_servers: "{{ vm_dns }}"
+        cdrom:
+          - type: iso
+            iso_path: "[{{ iso_datastore }}] {{ iso_folder }}/{{ ubuntu_iso_name }}"
+            state: present
+          - type: iso
+            iso_path: "[{{ iso_datastore }}] {{ iso_folder }}/{{ seed_iso_name }}"
+            state: present
+        boot:
+          boot_order:
+            - cdrom
+            - disk
+      register: vm_create
+
+    - name: Mostrar resultado creación VM base
+      debug:
+        var: vm_create
+
+    - name: Nota manual - esperar a que termine el autoinstall
+      debug:
+        msg:
+          - "La VM '{{ vm_name }}' se creó y está arrancando con autoinstall."
+          - "Ahora ve a vCenter, abre la consola de la VM y espera a que termine la instalación."
+          - "Cuando termine, la VM quedará con Ubuntu 24.04 instalado y tu llave SSH."
+          - "Luego apaga la VM desde el SO o vCenter y continúa con el siguiente playbook para convertirla en template."
