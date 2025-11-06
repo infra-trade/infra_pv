@@ -11,10 +11,10 @@
     vmware_venv: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
     venv_python: "{{ vmware_venv + '/bin/python3' }}"
 
-    # 🔒 Forzamos aquí las vars del ISO para evitar "undefined"
-    ubuntu_iso_url: ""          # deja vacío (usaremos el ISO que ya está en el datastore)
-    ubuntu_iso_local: ""        # si quisieras usar un ISO local, coloca aquí la ruta absoluta
-    datastore_iso_dir: "ISOS"   # carpeta del datastore donde están los ISOs
+    # Forzamos vars ISO aquí (usando ISO ya en datastore)
+    ubuntu_iso_url: ""
+    ubuntu_iso_local: ""
+    datastore_iso_dir: "ISOS"
     existing_datastore_iso: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.3-live-server-amd64.iso"
 
   pre_tasks:
@@ -44,6 +44,52 @@
     - name: Usar el Python del venv para el resto del play
       set_fact:
         ansible_python_interpreter: "{{ venv_python }}"
+
+    # ====== NUEVO: Resolver credenciales/endpoint de vCenter ======
+    - name: Resolver endpoint vCenter (hostname) desde vars/env/vault
+      set_fact:
+        vcenter_hostname: >-
+          {{
+            (vcenter_hostname | default('', true))
+            | default(lookup('env','VCENTER_HOSTNAME'), true)
+            | default('', true)
+          }}
+
+    - name: Resolver usuario vCenter desde vars/env/vault
+      no_log: true
+      set_fact:
+        vcenter_username: >-
+          {{
+            (vcenter_username | default('', true))
+            | default(lookup('env','VCENTER_USERNAME'), true)
+            | default(vault_vcenter_username | default('', true), true)
+            | default('', true)
+          }}
+
+    - name: Resolver password vCenter desde vars/env/vault
+      no_log: true
+      set_fact:
+        vcenter_password: >-
+          {{
+            (vcenter_password | default('', true))
+            | default(lookup('env','VCENTER_PASSWORD'), true)
+            | default(vault_vcenter_password | default('', true), true)
+            | default('', true)
+          }}
+
+    - name: Validar credenciales y endpoint de vCenter
+      assert:
+        that:
+          - (vcenter_hostname | length) > 0
+          - (vcenter_username | length) > 0
+          - (vcenter_password | length) > 0
+        fail_msg: >-
+          Faltan parámetros de vCenter.
+          hostname='{{ vcenter_hostname | default('') }}'
+          username='{{ vcenter_username | default('') }}'
+          Asegúrate de definirlos en group_vars/all.yml o en vault.yml
+          (o exporta VCENTER_HOSTNAME / VCENTER_USERNAME / VCENTER_PASSWORD en el entorno).
+    # ====== FIN NUEVO ======
 
   roles:
     - role: ubuntu_autoinstall_vsphere

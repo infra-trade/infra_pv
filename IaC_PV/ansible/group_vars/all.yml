@@ -1,12 +1,15 @@
-# === vCenter (tus valores reales) ===
+# === vCenter (tus valores) ===
 vcenter_hostname: "192.168.5.151"
 vcenter_datacenter: "POPULAR VALORES"
 vcenter_cluster: "PV-CLUSTER"
 vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
 vcenter_network: "VLAN-5"
 vcenter_validate_certs: false
-vcenter_username: "{{ vault_vcenter_username }}"
-vcenter_password: "{{ vault_vcenter_password }}"
+
+# Usuario/clave pueden venir de vault.yml:
+# vcenter_username: "{{ vault_vcenter_username }}"
+# vcenter_password: "{{ vault_vcenter_password }}"
+
 vm_folder: "Infra"
 
 # === Template / nombres ===
@@ -26,16 +29,12 @@ guest_dns_servers: ["192.168.5.1", "8.8.8.8"]
 net_interface: "ens160"
 
 # === Ubuntu ISO ===
-# usamos ISO ya existente en datastore:
 ubuntu_iso_url: ""
 ubuntu_iso_local: ""
 datastore_iso_dir: "ISOS"
 existing_datastore_iso: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.3-live-server-amd64.iso"
 
-# === SSH (solo keys) ===
+# === SSH ===
 ssh_pubkey_path: "~/.ssh/id_ed25519.pub"
 disable_password_ssh: true
 linux_user: "ubuntu"
-
-# === Credenciales (en vault) ===
-# vault_vcenter_username y vault_vcenter_password deben estar en vault.yml cifrado
