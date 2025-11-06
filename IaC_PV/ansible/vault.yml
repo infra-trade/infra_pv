@@ -1,0 +1,3 @@
+---
+vault_vcenter_username: "ansible_svc@vsphere.local"
+vault_vcenter_password: "S0p0rt3.."

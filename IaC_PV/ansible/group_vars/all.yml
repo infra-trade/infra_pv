@@ -1,0 +1,45 @@
+# === vCenter ===
+vcenter_hostname: "192.168.5.151"
+vcenter_datacenter: "POPULAR VALORES" 
+vcenter_cluster: "PV-CLUSTER"
+vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
+vcenter_network: "VLAN-5"
+vcenter_validate_certs: false
+vcenter_username: "{{ vault_vcenter_username }}"
+vcenter_password: "{{ vault_vcenter_password }}"
+vm_folder: "PV_IaC"
+
+# === Template / nombres ===
+seed_vm_name: "ubuntu-seed-24-04"
+template_name: "ubuntu-24-04-template"
+
+# === Especificaciones comunes de VM ===
+vm_cpu: 3
+vm_ram_mb: 32768
+vm_disk_gb: 120
+guest_domain: "localdomain"
+guest_gateway: "192.168.5.252"
+guest_netmask: "255.255.255.0"
+guest_dns_servers: ["192.168.10.2", "192.168.10.50"]
+net_interface: "ens160"           # interface típica en VMware
+
+# === Ubuntu ISO ===
+ubuntu_iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso"
+ubuntu_iso_local: ""              # si usas ISO local, pon ruta y deja iso_url vacío
+datastore_iso_dir: "iso"          # carpeta en datastore para ISOs
+
+# === SSH (SOLO keys) ===
+ssh_pubkey_path: "~/.ssh/id_rsa.pub"     # TU llave pública
+disable_password_ssh: true               # no permitir auth por contraseña
+
+# === Usuario Linux inicial ===
+linux_user: "ubuntu"
+
+# === IPs/Hosts a provisionar desde el template ===
+infra_hosts:
+  - name: "infra-master"
+    ip: "192.168.5.85"
+  - name: "infra-nodo1"
+    ip: "192.168.5.86"
+  - name: "infra-nodo2"
+    ip: "192.168.5.87"
