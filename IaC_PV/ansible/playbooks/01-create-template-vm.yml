@@ -7,12 +7,14 @@
   pre_tasks:
     ####################################################################
     # 1) Cargar credenciales desde vars/env/vault.yml (opcional)
-    #    - Si existe y tiene vault_vcenter.* o vcenter_* se usarán abajo.
+    #    Debe contener (como en el play 00):
+    #      vcenter_hostname: ...
+    #      vcenter_username: ...
+    #      vcenter_password: ...
     ####################################################################
     - name: Cargar credenciales de vCenter desde vars/env/vault.yml (si existe)
       ansible.builtin.include_vars:
         file: vars/env/vault.yml
-        name: vault_vcenter
       ignore_errors: true
       failed_when: false
 
@@ -20,7 +22,9 @@
     # 2) Resolver endpoint/credenciales desde:
     #    - Variables de entorno VCENTER_*
     #    - group_vars/all.yml (vcenter_*)
-    #    - vars/env/vault.yml (vault_vcenter.vcenter_*)
+    #    - vars/env/vault.yml (vcenter_*)
+    #
+    #    NOTA: usamos exactamente la misma lógica que en 00-build-template.yml
     ####################################################################
     - name: Resolver endpoint/credenciales desde entorno, group_vars y vault
       ansible.builtin.set_fact:
@@ -28,19 +32,16 @@
           {{
             (lookup('env', 'VCENTER_HOSTNAME') | default('', true))
             or (vcenter_hostname | default('', true))
-            or (vault_vcenter.vcenter_hostname | default('', true))
           }}
         vcenter_username: >-
           {{
             (lookup('env', 'VCENTER_USERNAME') | default('', true))
             or (vcenter_username | default('', true))
-            or (vault_vcenter.vcenter_username | default('', true))
           }}
         vcenter_password: >-
           {{
             (lookup('env', 'VCENTER_PASSWORD') | default('', true))
             or (vcenter_password | default('', true))
-            or (vault_vcenter.vcenter_password | default('', true))
           }}
 
     - name: Consolidar parámetros efectivos de vCenter y scope
@@ -64,10 +65,7 @@
           password_from_vault: >-
             {{
               'YES'
-              if (
-                (vault_vcenter is defined and vault_vcenter.vcenter_password is defined and (vault_vcenter.vcenter_password | string | length) > 0)
-                or (vcenter_password | string | length) > 0
-              )
+              if (vcenter_password | string | length) > 0
               else 'NO'
             }}
 
@@ -79,7 +77,7 @@
           - (vcenter_password | length) > 0
         fail_msg: >-
           Faltan parámetros de vCenter. hostname='{{ vcenter_hostname }}' username='{{ vcenter_username }}'.
-          Define en group_vars/all.yml (vcenter_*) o en vars/env/vault.yml (vault_vcenter.vcenter_*)
+          Define en group_vars/all.yml (vcenter_*) o en vars/env/vault.yml (vcenter_*)
           o exporta VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD.
         success_msg: "Parámetros de vCenter OK."
 
@@ -190,5 +188,4 @@
           - "La VM '{{ vm_name }}' fue creada/actualizada en '{{ vcenter_datacenter }} / {{ vcenter_cluster }}'."
           - "Abre la consola en vCenter y verifica que arranca desde el ISO de Ubuntu + seed."
           - "Deja que termine el autoinstall y la configuración cloud-init."
-          - "Cuando termine, APAGA la VM."
-          - "Luego puedes marcarla como Template en vCenter o usar un playbook 02-* para convertirla."
+          - "Cuando termine, APAGA la VM y márcala como Template o usa el siguiente playbook para convertirla."
