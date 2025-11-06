@@ -1,27 +1,60 @@
 ---
-- name: Dependencias en controlador
+# 0) Recolectar facts del controlador (para saber si es OpenBSD, Debian, etc.)
+- name: Gather facts on localhost
+  setup:
   delegate_to: localhost
   become: false
-  block:
-    - name: Instalar herramientas ISO/pyvmomi
-      package:
-        name:
-          - genisoimage
-          - xorriso
-          - python3-pip
-        state: present
-      ignore_errors: true
 
-    - name: Instalar pyvmomi (módulos VMware)
-      pip:
-        name: pyvmomi
+# 1) Instalar dependencias según el SO del controlador
+#    - OpenBSD:    py3-pip, cdrtools (mkisofs), xorriso
+#    - Debian/Ub.: python3-pip, genisoimage (mkisofs), xorriso
+#    - RHEL/CentOS: python3-pip, genisoimage, xorriso
+- name: Instalar dependencias en OpenBSD
+  package:
+    name:
+      - py3-pip
+      - cdrtools
+      - xorriso
+    state: present
+  become: true
+  when: ansible_facts['os_family'] == 'OpenBSD'
 
+- name: Instalar dependencias en Debian/Ubuntu
+  apt:
+    name:
+      - python3-pip
+      - genisoimage
+      - xorriso
+    state: present
+    update_cache: true
+  become: true
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Instalar dependencias en RedHat/CentOS
+  yum:
+    name:
+      - python3-pip
+      - genisoimage
+      - xorriso
+    state: present
+  become: true
+  when: ansible_facts['os_family'] == 'RedHat'
+
+# 2) Instalar pyvmomi via pip3 (para módulos VMware)
+- name: Instalar pyvmomi (módulos VMware)
+  pip:
+    name: pyvmomi
+    executable: pip3
+  become: true
+
+# 3) Definir nombre y path de ISO de Ubuntu
 - name: Nombre y path de ISO Ubuntu
   set_fact:
     ubuntu_iso_filename: "{{ (ubuntu_iso_url | basename) if ubuntu_iso_url|length>0 else (ubuntu_iso_local | basename) }}"
     ubuntu_iso_local_path: >-
       {{ (ubuntu_iso_local if ubuntu_iso_local|length>0 else (lookup('env','HOME') + '/.cache/ansible/' + (ubuntu_iso_url | basename))) }}
 
+# 4) Descargar ISO si hay URL
 - name: Descargar ISO Ubuntu si hay URL
   delegate_to: localhost
   when: ubuntu_iso_url|length > 0
@@ -31,6 +64,7 @@
     mode: "0644"
     force: no
 
+# 5) Subir ISO al datastore
 - name: Subir ISO Ubuntu al datastore
   community.vmware.vsphere_copy:
     hostname: "{{ vcenter_hostname }}"
@@ -42,6 +76,7 @@
     datastore: "{{ vcenter_datastore }}"
     path: "{{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
 
+# 6) Preparar seed cloud-init local
 - name: Preparar seed cloud-init local
   delegate_to: localhost
   file:
@@ -71,7 +106,6 @@
         host_ip: "192.168.5.250"   # IP temporal para seed (no usada luego)
         mask_bits: "{{ mask_bits }}"
         ssh_key: "{{ ssh_pubkey_content }}"
-
     - name: meta-data
       template:
         src: "templates/meta-data.j2"
@@ -80,16 +114,18 @@
       vars:
         hostname: "{{ seed_vm_name }}"
 
-- name: Crear seed ISO (NoCloud)
+# 7) Crear seed ISO con mkisofs (funciona en OpenBSD y Linux)
+- name: Crear seed ISO (NoCloud) con mkisofs
   delegate_to: localhost
   command:
     cmd: >
-      genisoimage -output /tmp/seed-{{ seed_vm_name }}.iso
-      -volid cidata -joliet -rock
+      mkisofs -output /tmp/seed-{{ seed_vm_name }}.iso
+      -V cidata -J -R
       /tmp/seed-{{ seed_vm_name }}/user-data
       /tmp/seed-{{ seed_vm_name }}/meta-data
     creates: "/tmp/seed-{{ seed_vm_name }}.iso"
 
+# 8) Subir seed ISO al datastore
 - name: Subir seed ISO al datastore
   community.vmware.vsphere_copy:
     hostname: "{{ vcenter_hostname }}"
@@ -101,6 +137,7 @@
     datastore: "{{ vcenter_datastore }}"
     path: "{{ datastore_iso_dir }}/seed-{{ seed_vm_name }}.iso"
 
+# 9) Crear VM seed y montar ISOs
 - name: Crear VM seed y montar ISOs
   community.vmware.vmware_guest:
     hostname: "{{ vcenter_hostname }}"
@@ -140,22 +177,12 @@
         unit_number: 1
     wait_for_ip_address: no
 
-# La instalación tarda varios minutos; esperamos a que el sistema quede accesible por SSH.
-- name: Esperar SSH activo (hostname seed, IP por DHCP o temporal)
-  wait_for:
-    host: "{{ vcenter_hostname }}"   # NO sabemos la IP del seed aún, solo esperamos a que finalice instalación
-    port: 443
-    timeout: 1
-  delegate_to: localhost
-  ignore_errors: true
-
-# En la práctica, mejor esperar por guest tools o por la MAC/IP descubierta.
-# Simplificamos: esperamos un tiempo amplio y luego apagamos por ACPI desde vSphere.
+# 10) Espera simple a que finalice el autoinstall (ajusta si tu entorno es más/menos rápido)
 - name: Espera razonable a que finalice autoinstall
   pause:
     minutes: 15
 
-# Desmontar ISOs y apagar para "limpiar" antes de templar
+# 11) Desmontar CDROMs y apagar VM seed
 - name: Desmontar CDROMs
   community.vmware.vmware_guest:
     hostname: "{{ vcenter_hostname }}"
