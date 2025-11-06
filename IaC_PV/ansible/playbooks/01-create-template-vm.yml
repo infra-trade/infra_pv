@@ -180,6 +180,7 @@
 
         cdrom:
           - type: iso
+ 
             iso_path: "[{{ iso_datastore }}] {{ iso_folder }}/{{ ubuntu_iso_name }}"
             state: present
           - type: iso
