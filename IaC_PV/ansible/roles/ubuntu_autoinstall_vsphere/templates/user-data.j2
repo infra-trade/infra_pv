@@ -1,50 +1,57 @@
 #cloud-config
-
-hostname: {{ hostname }}
+# user-data.j2 — cloud-init para Ubuntu
+# Usa guest_hostname si existe; si no, seed_vm_name.
+hostname: {{ guest_hostname | default(seed_vm_name) }}
 manage_etc_hosts: true
-fqdn: {{ hostname }}.{{ guest_domain | default('localdomain') }}
 
-# Usuario inicial con sudo sin password (puedes cambiarlo luego)
 users:
-  - name: {{ linux_user }}
-    gecos: "{{ linux_user | capitalize }}"
-    groups: [adm, cdrom, dip, plugdev, lxd, sudo]
+  - name: {{ linux_user | default('ubuntu') }}
+    groups: sudo
     shell: /bin/bash
-    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
-    lock_passwd: true
+    sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
-      - "{{ ssh_key }}"
+      - {{ ssh_pubkey_content }}
 
-ssh_pwauth: {{ (disable_password_ssh | default(true)) | ternary('false','true') }}
+ssh_pwauth: false
+disable_root: true
 
-# Netplan estático temporal para el proceso de instalación
-# (No se usará en la plantilla final; la VM seed se apaga y convertimos a template)
+package_update: true
+package_upgrade: false
+
+# Configuración de red:
+# Si defines guest_ip/guest_gateway/guest_dns/_prefix se deja estática; de lo contrario usa DHCP.
+% if guest_ip is defined and (guest_ip | string | length) > 0 and _prefix is defined and ( _prefix | int ) > 0 and guest_gateway is defined and (guest_gateway | string | length) > 0
 network:
   version: 2
   ethernets:
-    {{ net_interface }}:
-      dhcp4: false
+    # Nota: ajusta el nombre si tu NIC en ESXi es diferente (ens192, ens160, etc.).
+    # Puedes sobreescribir con 'guest_nic_name' en group_vars si lo necesitas.
+    {{ guest_nic_name | default('ens192') }}:
       addresses:
-        - {{ host_ip }}/{{ mask_bits }}
+        - {{ guest_ip }}/{{ _prefix }}
       gateway4: {{ guest_gateway }}
       nameservers:
-        addresses: [{% for d in guest_dns_servers %}{{ d }}{% if not loop.last %}, {% endif %}{% endfor %}]
+        addresses:
+% if guest_dns is defined and guest_dns | length > 0
+{% for d in guest_dns %}
+          - {{ d }}
+{% endfor %}
+% else
+          - 8.8.8.8
+          - 1.1.1.1
+% endif
+% else
+# Sin parámetros de red => DHCP
+network:
+  version: 2
+  ethernets:
+    {{ guest_nic_name | default('ens192') }}:
+      dhcp4: true
+% endif
 
-# Paquetes mínimos útiles (puedes quitar si no los quieres en la seed)
-packages:
-  - qemu-guest-agent
-  - ca-certificates
-  - curl
+# Archivos opcionales que quieras escribir al aprovisionar
+write_files: []
 
-# Actualizaciones durante el primer boot
-package_update: true
-package_upgrade: true
-
-# Deshabilitar cloud-init al finalizar para que la plantilla no regenere en cada clon
+# Comandos que correrán al final del primer arranque
 runcmd:
-  - systemctl enable qemu-guest-agent || true
-  - systemctl start qemu-guest-agent || true
-  - touch /etc/cloud/cloud-init.disabled
-
-# Minimiza logs de cloud-init
-final_message: "Cloud-init finalizado en {{ hostname }}"
+  - [ cloud-init, status, --wait ]

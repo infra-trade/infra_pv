@@ -1,2 +1,3 @@
-instance-id: {{ hostname }}
-local-hostname: {{ hostname }}
+# meta-data.j2 — cloud-init meta-data
+instance-id: {{ seed_vm_name }}
+local-hostname: {{ guest_hostname | default(seed_vm_name) }}
