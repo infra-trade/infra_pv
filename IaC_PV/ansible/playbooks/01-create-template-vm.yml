@@ -4,85 +4,66 @@
   connection: local
   gather_facts: false
 
+  # Cargamos credenciales cifradas igual que en 00-build-template.yml
+  # (si el archivo no existe o no es vault válido, simplemente se ignora)
+  vars_files:
+    - vars/env/vault.yml
+
   pre_tasks:
     ####################################################################
-    # 1) Cargar credenciales desde vault (opcional, misma lógica que 00)
-    ####################################################################
-    - name: Cargar credenciales de vCenter desde vault (si existe)
-      ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../vars/env/vault.yml"
-        name: vault_vcenter
-      ignore_errors: true
-      failed_when: false
-
-    ####################################################################
-    # 2) Resolver endpoint/credenciales desde entorno, group_vars y vault
+    # 1) Resolver endpoint/credenciales desde entorno, group_vars y vault
     ####################################################################
     - name: Resolver endpoint/credenciales desde entorno, group_vars y vault
       ansible.builtin.set_fact:
-        # Desde entorno
-        _vc_hostname_from_env: "{{ lookup('env', 'VCENTER_HOSTNAME') | default('', true) }}"
-        _vc_username_from_env: "{{ lookup('env', 'VCENTER_USERNAME') | default('', true) }}"
-        _vc_password_from_env: "{{ lookup('env', 'VCENTER_PASSWORD') | default('', true) }}"
-
-        # Desde group_vars/all.yml (si existen)
-        _vc_hostname_from_group: "{{ vcenter_hostname | default('', true) }}"
-        _vc_username_from_group: "{{ vcenter_username | default('', true) }}"
-        _vc_password_from_group: "{{ vcenter_password | default('', true) }}"
-
-        # Desde vault (si se cargó bien)
-        _vc_hostname_from_vault: "{{ (vault_vcenter | default({})).vcenter_hostname | default('', true) }}"
-        _vc_username_from_vault: "{{ (vault_vcenter | default({})).vcenter_username | default('', true) }}"
-        _vc_password_from_vault: "{{ (vault_vcenter | default({})).vcenter_password | default('', true) }}"
-
-    - name: Consolidar parámetros efectivos de vCenter
-      ansible.builtin.set_fact:
         vcenter_hostname: >-
           {{
-            _vc_hostname_from_env
-            or _vc_hostname_from_group
-            or _vc_hostname_from_vault
+            (lookup('env', 'VCENTER_HOSTNAME') | default('', true))
+            or (vcenter_hostname | default('', true))
           }}
         vcenter_username: >-
           {{
-            _vc_username_from_env
-            or _vc_username_from_group
-            or _vc_username_from_vault
+            (lookup('env', 'VCENTER_USERNAME') | default('', true))
+            or (vcenter_username | default('', true))
           }}
         vcenter_password: >-
           {{
-            _vc_password_from_env
-            or _vc_password_from_group
-            or _vc_password_from_vault
+            (lookup('env', 'VCENTER_PASSWORD') | default('', true))
+            or (vcenter_password | default('', true))
           }}
+
+    - name: Consolidar parámetros efectivos de vCenter
+      ansible.builtin.set_fact:
+        vcenter_hostname: "{{ vcenter_hostname | default('') }}"
+        vcenter_username: "{{ vcenter_username | default('') }}"
+        vcenter_password: "{{ vcenter_password | default('') }}"
 
     - name: Mostrar parámetros efectivos de vCenter (debug)
       ansible.builtin.debug:
         msg:
-          hostname: "{{ vcenter_hostname | default('') }}"
-          username: "{{ vcenter_username | default('') }}"
+          hostname: "{{ vcenter_hostname }}"
+          username: "{{ vcenter_username }}"
           password_from_vault: >-
             {{
               'YES'
-              if ((vault_vcenter | default({})).vcenter_password | default('') | length > 0)
+              if (vcenter_password | default('') | length > 0)
               else 'NO'
             }}
 
     - name: Validar credenciales y endpoint de vCenter
       ansible.builtin.assert:
         that:
-          - (vcenter_hostname | default('')) | length > 0
-          - (vcenter_username | default('')) | length > 0
-          - (vcenter_password | default('')) | length > 0
+          - (vcenter_hostname | length) > 0
+          - (vcenter_username | length) > 0
+          - (vcenter_password | length) > 0
         fail_msg: >-
-          Faltan parámetros de vCenter. hostname='{{ vcenter_hostname | default('') }}'
-          username='{{ vcenter_username | default('') }}'.
+          Faltan parámetros de vCenter. hostname='{{ vcenter_hostname }}'
+          username='{{ vcenter_username }}'.
           Define en group_vars/all.yml o en vars/env/vault.yml
           (o exporta VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD).
         success_msg: "Parámetros de vCenter OK."
 
     ####################################################################
-    # 3) Validar alcance (DC/DS/Cluster/Red)
+    # 2) Validar alcance (DC/DS/Cluster/Red)
     ####################################################################
     - name: Validar que datacenter/datastore/red/cluster están definidos
       ansible.builtin.assert:
@@ -112,10 +93,10 @@
 
     # Recursos
     vm_cpu: 3
-    vm_ram_mb: 32768        # 32 GB
+    vm_ram_mb: 32768          # 32 GB
     vm_disk_gb: 120
 
-    # Red (ajusta IP si hace falta)
+    # Red (ajusta IP si quieres)
     vm_network: "{{ vcenter_network }}"
     vm_ip: "192.168.5.80"
     vm_netmask: "255.255.255.0"
@@ -124,7 +105,7 @@
       - "8.8.8.8"
       - "1.1.1.1"
 
-    # ISOs en el datastore
+    # ISOS en el datastore (ya subidos por 00-build-template.yml)
     iso_datastore: "{{ vcenter_datastore }}"
     iso_folder: "{{ datastore_iso_dir | default('ISOS') }}"
 
@@ -132,7 +113,7 @@
     seed_iso_name: "seed-ubuntu-seed-24-04.iso"
 
   ####################################################################
-  # Tareas principales
+  # 3) Crear la VM base
   ####################################################################
   tasks:
 
