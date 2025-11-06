@@ -5,5 +5,35 @@
   gather_facts: false
   vars_files:
     - ../vault.yml
+
+  # 👉 Usaremos un venv propio para evitar PEP 668
+  vars:
+    vmware_venv: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
+    ansible_python_interpreter: "{{ vmware_venv + '/bin/python3' }}"
+
+  pre_tasks:
+    - name: Crear venv para módulos VMware (si no existe)
+      delegate_to: localhost
+      become: false
+      command:
+        cmd: "python3 -m venv {{ vmware_venv }}"
+      args:
+        creates: "{{ vmware_venv }}/bin/python3"
+
+    - name: Actualizar pip en el venv
+      delegate_to: localhost
+      become: false
+      pip:
+        name: pip
+        state: latest
+        virtualenv: "{{ vmware_venv }}"
+
+    - name: Instalar pyvmomi en el venv
+      delegate_to: localhost
+      become: false
+      pip:
+        name: pyvmomi
+        virtualenv: "{{ vmware_venv }}"
+
   roles:
     - role: ubuntu_autoinstall_vsphere

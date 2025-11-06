@@ -41,11 +41,11 @@
   when: ansible_facts['os_family'] == 'RedHat'
 
 # 2) Instalar pyvmomi via pip3 (para módulos VMware)
-- name: Instalar pyvmomi (módulos VMware)
-  pip:
-    name: pyvmomi
-    executable: pip3
-  become: true
+#- name: Instalar pyvmomi (módulos VMware)
+#  pip:
+#    name: pyvmomi
+#    executable: pip3
+#  become: true
 
 # 3) Definir nombre y path de ISO de Ubuntu
 - name: Nombre y path de ISO Ubuntu
