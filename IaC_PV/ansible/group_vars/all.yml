@@ -35,13 +35,13 @@ seed_vm_name: "ubuntu-seed-24-04"
 linux_user: "ansible"
 linux_user_fullname: "Ansible Admin"
 
-ssh_pubkey_path: "/home/ansible/.ssh/id_rsa.pub"
+ssh_pubkey_path: "/home/ansible/.ssh/id_ed25519.pub"
 
 guest_ip: "192.168.5.85"
 guest_netmask: "255.255.255.0"
-guest_gateway: "192.168.5.1"
+guest_gateway: "192.168.5.252"
 guest_dns:
-  - "8.8.8.8"
+  - "192.168.10.2"
   - "1.1.1.1"
 
 # =========================
