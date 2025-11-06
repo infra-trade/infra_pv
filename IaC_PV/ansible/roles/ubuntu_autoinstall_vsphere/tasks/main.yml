@@ -187,10 +187,36 @@
     ssh_pubkey_content: "{{ _pubkey_data.content | b64decode | trim }}"
 # --- Fin gestión de llave pública ---
 
-- name: Calcular máscara en bits
+# 7) Calcular máscara en bits SIN el filtro 'ipaddr'
+- name: Descomponer netmask en octetos
   set_fact:
-    mask_bits: "{{ (guest_netmask | ipaddr('prefix')) }}"
+    _octs: "{{ guest_netmask | default('255.255.255.0') | string | split('.') | map('int') | list }}"
 
+- name: Mapa de bits por octeto
+  set_fact:
+    _bitlen_map:
+      0: 0
+      128: 1
+      192: 2
+      224: 3
+      240: 4
+      248: 5
+      252: 6
+      254: 7
+      255: 8
+
+- name: Calcular prefix a partir del netmask
+  set_fact:
+    mask_bits: "{{ (_octs | map('extract', _bitlen_map) | list | sum) | int }}"
+
+- name: Validar prefix calculado
+  assert:
+    that:
+      - mask_bits >= 0
+      - mask_bits <= 32
+    fail_msg: "Netmask inválido: {{ guest_netmask }}"
+
+# 8) Renderizar user-data/meta-data
 - name: Renderizar user-data/meta-data
   delegate_to: localhost
   block:
@@ -212,7 +238,7 @@
       vars:
         hostname: "{{ seed_vm_name }}"
 
-# 7) Crear seed ISO (NoCloud) con mkisofs
+# 9) Crear seed ISO (NoCloud) con mkisofs
 - name: Crear seed ISO (NoCloud) con mkisofs
   delegate_to: localhost
   command:
@@ -223,7 +249,7 @@
       /tmp/seed-{{ seed_vm_name }}/meta-data
     creates: "/tmp/seed-{{ seed_vm_name }}.iso"
 
-# 8) Subir seed ISO al datastore
+# 10) Subir seed ISO al datastore
 - name: Subir seed ISO al datastore
   community.vmware.vsphere_copy:
     hostname: "{{ vcenter_hostname }}"
@@ -235,7 +261,7 @@
     datastore: "{{ vcenter_datastore }}"
     path: "{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
 
-# 9) Crear VM seed y montar ISOs
+# 11) Crear VM seed y montar ISOs
 - name: Crear VM seed y montar ISOs
   community.vmware.vmware_guest:
     hostname: "{{ vcenter_hostname }}"
@@ -282,12 +308,12 @@
         unit_number: 1
     wait_for_ip_address: no
 
-# 10) Espera simple a que finalice autoinstall (ajusta según tu entorno)
+# 12) Espera simple a que finalice autoinstall (ajusta según tu entorno)
 - name: Espera razonable a que finalice autoinstall
   pause:
     minutes: 15
 
-# 11) Desmontar CDROMs y apagar VM seed
+# 13) Desmontar CDROMs y apagar VM seed
 - name: Desmontar CDROMs
   community.vmware.vmware_guest:
     hostname: "{{ vcenter_hostname }}"
