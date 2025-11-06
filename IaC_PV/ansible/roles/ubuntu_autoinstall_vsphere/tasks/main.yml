@@ -6,7 +6,10 @@
   delegate_to: localhost
   run_once: true
 
+############################################
 # 1) Sanity check contra vCenter
+############################################
+
 - name: Probar conexión a vCenter (sanity check)
   community.vmware.vmware_about_info:
     hostname: "{{ vcenter_hostname }}"
@@ -25,7 +28,10 @@
     fail_msg: "No se pudo conectar a vCenter. Revisa host/usuario/clave."
   run_once: true
 
-# 2) Normalizar datacenter/datastore desde vars/extra_vars
+############################################
+# 2) Datacenter / Datastore
+############################################
+
 - name: DEBUG vCenter scope (datacenter/datastore)
   ansible.builtin.debug:
     msg:
@@ -37,18 +43,20 @@
   ansible.builtin.assert:
     that:
       - (vcenter_datacenter | default('') | length) > 0
-      - (vcenter_datastore | default('')  | length) > 0
+      - (vcenter_datastore  | default('') | length) > 0
     fail_msg: "Faltan 'vcenter_datacenter' o 'vcenter_datastore'. Verifica group_vars/all.yml o -e."
   run_once: true
 
-# Guardamos versiones limpias
 - name: Fijar variables internas de DC/DS
   ansible.builtin.set_fact:
     _dc: "{{ vcenter_datacenter | trim }}"
     _ds: "{{ vcenter_datastore  | trim }}"
   run_once: true
 
-# 3) Verificar mkisofs en OpenBSD (no instalamos paquetes aquí)
+############################################
+# 3) mkisofs en OpenBSD
+############################################
+
 - name: Verificar mkisofs en OpenBSD
   ansible.builtin.command: which mkisofs
   register: _mkisofs_check
@@ -58,7 +66,10 @@
   delegate_to: localhost
   run_once: true
 
+############################################
 # 4) Normalizar variables de ISO
+############################################
+
 - name: Normalizar variables de ISO (strings)
   ansible.builtin.set_fact:
     ubuntu_iso_url_str: "{{ (ubuntu_iso_url | default('')) | trim }}"
@@ -71,7 +82,6 @@
     _iso_dir: "{{ datastore_iso_dir_str }}"
   run_once: true
 
-# 5) Determinar si hay fuente de ISO (opcional; para ahora nos basta seed ISO)
 - name: Calcular banderas de origen de ISO
   ansible.builtin.set_fact:
     has_iso_url: "{{ ubuntu_iso_url_str != '' }}"
@@ -85,7 +95,10 @@
     success_msg: "Fuente de ISO definida (o se usará sólo seed)."
   run_once: true
 
-# 6) Preparar directorio temporal para seed cloud-init
+############################################
+# 5) Preparar directorio seed cloud-init
+############################################
+
 - name: Preparar seed cloud-init local
   ansible.builtin.file:
     path: "/tmp/seed-{{ seed_vm_name }}"
@@ -94,7 +107,10 @@
   delegate_to: localhost
   run_once: true
 
-# 7) SSH key pública
+############################################
+# 6) SSH key pública
+############################################
+
 - name: Resolver ruta de la llave pública (expandir ~)
   ansible.builtin.set_fact:
     _pubkey_path: "{{ (ssh_pubkey_path | default('~/.ssh/id_rsa.pub')) | expanduser }}"
@@ -129,7 +145,10 @@
     ssh_pubkey_content: "{{ _pubkey_slurp.content | b64decode | trim }}"
   run_once: true
 
-# 8) Calcular prefix desde netmask
+############################################
+# 7) Calcular prefix desde netmask (sin ipaddr)
+############################################
+
 - name: Descomponer netmask en octetos
   ansible.builtin.set_fact:
     _mask_octets: "{{ guest_netmask.split('.') | map('int') | list }}"
@@ -138,25 +157,25 @@
 - name: Mapa de bits por octeto
   ansible.builtin.set_fact:
     _bits_map:
-      "0": 0
-      "128": 1
-      "192": 2
-      "224": 3
-      "240": 4
-      "248": 5
-      "252": 6
-      "254": 7
-      "255": 8
+      0: 0
+      128: 1
+      192: 2
+      224: 3
+      240: 4
+      248: 5
+      252: 6
+      254: 7
+      255: 8
   run_once: true
 
 - name: Calcular prefix a partir del netmask
   ansible.builtin.set_fact:
     prefix: >-
       {{
-        _bits_map[str(_mask_octets[0])] +
-        _bits_map[str(_mask_octets[1])] +
-        _bits_map[str(_mask_octets[2])] +
-        _bits_map[str(_mask_octets[3])]
+        _bits_map[_mask_octets[0]] +
+        _bits_map[_mask_octets[1]] +
+        _bits_map[_mask_octets[2]] +
+        _bits_map[_mask_octets[3]]
       }}
   run_once: true
 
@@ -169,9 +188,9 @@
     success_msg: "All assertions passed"
   run_once: true
 
-########################
-# 9) Render de cloud-init
-########################
+############################################
+# 8) Render de cloud-init
+############################################
 
 - name: user-data
   ansible.builtin.template:
@@ -189,9 +208,9 @@
   delegate_to: localhost
   run_once: true
 
-########################
-# 10) Crear seed ISO
-########################
+############################################
+# 9) Crear seed ISO
+############################################
 
 - name: Crear seed ISO (NoCloud) con mkisofs
   ansible.builtin.command: >
@@ -235,9 +254,9 @@
     success_msg: "Seed ISO local generado correctamente."
   run_once: true
 
-##################################################
-# 11) Subir seed ISO al datastore
-##################################################
+############################################
+# 10) Subir seed ISO al datastore
+############################################
 
 - name: Subir seed ISO al datastore
   community.vmware.vsphere_copy:
