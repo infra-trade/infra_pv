@@ -1,98 +1,85 @@
 ---
 - name: Construir VM seed Ubuntu 24.04 por autoinstall en vSphere
   hosts: localhost
-  connection: local
   gather_facts: false
-  vars_files:
-    - ../vault.yml
+  connection: local
 
   vars:
-    # venv para pyvmomi (evita PEP 668 en OpenBSD)
-    vmware_venv: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
-    venv_python: "{{ vmware_venv + '/bin/python3' }}"
-
-    # Forzamos vars ISO aquí (usando ISO ya en datastore)
-    ubuntu_iso_url: ""
-    ubuntu_iso_local: ""
-    datastore_iso_dir: "ISOS"
-    existing_datastore_iso: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.3-live-server-amd64.iso"
+    vmware_venv_path: "/home/ansible/.ansible/venvs/vmware"
 
   pre_tasks:
+    #################################################################
+    # 0) Preparar venv para módulos VMware
+    #################################################################
     - name: Crear venv para módulos VMware (si no existe)
-      delegate_to: localhost
-      become: false
-      ansible.builtin.command:
-        cmd: "python3 -m venv {{ vmware_venv }}"
+      ansible.builtin.command: "python3 -m venv {{ vmware_venv_path }}"
       args:
-        creates: "{{ venv_python }}"
+        creates: "{{ vmware_venv_path }}/bin/python3"
 
     - name: Actualizar pip en el venv
-      delegate_to: localhost
-      become: false
-      ansible.builtin.pip:
-        name: pip
-        state: latest
-        virtualenv: "{{ vmware_venv }}"
+      ansible.builtin.command: "{{ vmware_venv_path }}/bin/pip install --upgrade pip"
+      changed_when: false
 
     - name: Instalar dependencias de VMware en el venv
-      delegate_to: localhost
-      become: false
-      ansible.builtin.pip:
-        name:
-          - "pyvmomi>=8.0.2"
-          - "requests>=2.31.0"
-          - "urllib3>=1.26"
-        virtualenv: "{{ vmware_venv }}"
+      ansible.builtin.command: >
+        {{ vmware_venv_path }}/bin/pip install
+        --disable-pip-version-check
+        pyvmomi
+        requests
+      changed_when: false
 
     - name: Usar el Python del venv para el resto del play
-      set_fact:
-        ansible_python_interpreter: "{{ venv_python }}"
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ vmware_venv_path }}/bin/python3"
 
-    # Resolver vCenter desde vars/env/vault (incluye hostname opcional en vault)
+    #################################################################
+    # 1) Resolver credenciales / endpoint vCenter
+    #    Precedencia:
+    #      ENV > vault_* > valores ya definidos (group_vars/all.yml)
+    #################################################################
+
     - name: Resolver endpoint vCenter (hostname) desde vars/env/vault
-      set_fact:
+      ansible.builtin.set_fact:
+        _vc_hostname_env: "{{ lookup('env', 'VCENTER_HOSTNAME') | default('', true) }}"
+        _vc_username_env: "{{ lookup('env', 'VCENTER_USERNAME') | default('', true) }}"
+        _vc_password_env: "{{ lookup('env', 'VCENTER_PASSWORD') | default('', true) }}"
+        _vc_hostname_vault: "{{ vault_vcenter_hostname | default('', true) }}"
+        _vc_username_vault: "{{ vault_vcenter_username | default('', true) }}"
+        _vc_password_vault: "{{ vault_vcenter_password | default('', true) }}"
+
+    - name: Consolidar parámetros efectivos de vCenter
+      ansible.builtin.set_fact:
         vcenter_hostname: >-
           {{
-            (vcenter_hostname | default('', true))
-            | default(lookup('env','VCENTER_HOSTNAME'), true)
-            | default(vault_vcenter_hostname | default('', true), true)
-            | default('', true)
+            _vc_hostname_env
+            or _vc_hostname_vault
+            or vcenter_hostname | default('', true)
           }}
-
-    - name: Resolver usuario vCenter desde vars/env/vault
-      no_log: true
-      set_fact:
         vcenter_username: >-
           {{
-            (vcenter_username | default('', true))
-            | default(lookup('env','VCENTER_USERNAME'), true)
-            | default(vault_vcenter_username | default('', true), true)
-            | default('', true)
+            _vc_username_env
+            or _vc_username_vault
+            or vcenter_username | default('', true)
           }}
-
-    - name: Resolver password vCenter desde vars/env/vault
-      no_log: true
-      set_fact:
         vcenter_password: >-
           {{
-            (vcenter_password | default('', true))
-            | default(lookup('env','VCENTER_PASSWORD'), true)
-            | default(vault_vcenter_password | default('', true), true)
-            | default('', true)
+            _vc_password_env
+            or _vc_password_vault
+            or vcenter_password | default('', true)
           }}
 
     - name: Validar credenciales y endpoint de vCenter
-      assert:
+      ansible.builtin.assert:
         that:
-          - (vcenter_hostname | length) > 0
-          - (vcenter_username | length) > 0
-          - (vcenter_password | length) > 0
+          - (vcenter_hostname | default('')) | length > 0
+          - (vcenter_username | default('')) | length > 0
+          - (vcenter_password | default('')) | length > 0
         fail_msg: >-
-          Faltan parámetros de vCenter.
-          hostname='{{ vcenter_hostname | default('') }}'
+          Faltan parámetros de vCenter. hostname='{{ vcenter_hostname | default('') }}'
           username='{{ vcenter_username | default('') }}'
           Define en group_vars/all.yml o en vault.yml
           (o exporta VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD).
+        success_msg: "Parámetros de vCenter OK."
 
   roles:
     - role: ubuntu_autoinstall_vsphere
