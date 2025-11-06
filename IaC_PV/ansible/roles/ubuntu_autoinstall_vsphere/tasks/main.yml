@@ -1,143 +1,109 @@
 ---
-# 0) Facts del controlador
-- name: Gather facts on localhost
-  setup:
-  delegate_to: localhost
-  become: false
+# tasks/main.yml — ubuntu_autoinstall_vsphere (completo, con descarga opcional de ISO installer)
 
-# 1) Probar conexión a vCenter (sanity check)
+#############################
+# 0) Sanity check vCenter
+#############################
+
 - name: Probar conexión a vCenter (sanity check)
   community.vmware.vmware_about_info:
     hostname: "{{ vcenter_hostname }}"
     username: "{{ vcenter_username }}"
     password: "{{ vcenter_password }}"
     validate_certs: "{{ vcenter_validate_certs }}"
-    port: 443
   register: _vc_info
 
 - name: Validar respuesta de vCenter (no fallará si el módulo ya lanzó error)
   assert:
     that:
-      - (_vc_info.failed | default(false) | bool) == false
+      - _vc_info is not failed
     success_msg: "Conexión a vCenter OK."
-    fail_msg: "Conexión a vCenter falló (revisa usuario/clave/dominio o permisos)."
+    fail_msg: "No se pudo autenticar en vCenter con las credenciales provistas. Revisa usuario/clave/dominio o permisos."
 
-# 1.1) Verificar datacenter/datastore antes de tocar ficheros/ISOs
 - name: DEBUG vCenter scope (datacenter/datastore)
   debug:
     msg:
-      datacenter: "{{ vcenter_datacenter }}"
-      datastore: "{{ vcenter_datastore }}"
+      datacenter: "{{ vcenter_datacenter | default('') }}"
+      datastore: "{{ vcenter_datastore | default('') }}"
 
 - name: Validar datacenter y datastore no vacíos
   assert:
     that:
       - (vcenter_datacenter | length) > 0
-      - (vcenter_datastore  | length) > 0
-    fail_msg: >
-      Faltan 'vcenter_datacenter' o 'vcenter_datastore'.
-      Verifica iac/ansible/group_vars/all.yml (o -e / vault) antes de continuar.
+      - (vcenter_datastore | length) > 0
+    fail_msg: "Faltan 'vcenter_datacenter' o 'vcenter_datastore'. Verifica iac/ansible/group_vars/all.yml (o -e / vault) antes de continuar."
 
-# 2) Instalar dependencias del SO según plataforma
+#############################
+# 1) Dependencias locales (OpenBSD / Linux)
+#############################
+
 - name: Instalar dependencias en OpenBSD
-  package:
-    name:
-      - py3-pip
-      - cdrtools      # mkisofs
-      - xorriso
-    state: present
-  become: true
-  when: ansible_facts['os_family'] == 'OpenBSD'
+  when: ansible_os_family | lower == 'openbsd'
+  block:
+    - name: Verificar mkisofs en OpenBSD
+      stat:
+        path: /usr/local/bin/mkisofs
+      register: _mkisofs_stat
+
+    - name: Sugerir instalación de cdrtools si falta mkisofs (solo mensaje)
+      debug:
+        msg: "En OpenBSD, instala mkisofs con: doas pkg_add cdrtools"
+      when: not _mkisofs_stat.stat.exists
 
 - name: Instalar dependencias en Debian/Ubuntu
+  when: ansible_os_family | lower == 'debian'
+  become: yes
   apt:
     name:
-      - python3-pip
-      - genisoimage   # mkisofs
-      - xorriso
-    state: present
-    update_cache: true
-  become: true
-  when: ansible_facts['os_family'] == 'Debian'
-
-- name: Instalar dependencias en RedHat/CentOS
-  yum:
-    name:
-      - python3-pip
       - genisoimage
       - xorriso
     state: present
-  become: true
-  when: ansible_facts['os_family'] == 'RedHat'
+    update_cache: yes
 
-# 3) Normalizar variables y banderas (evita problemas de tipos)
+- name: Instalar dependencias en RedHat/CentOS
+  when: ansible_os_family | lower in ['redhat', 'rhel']
+  become: yes
+  yum:
+    name:
+      - genisoimage
+      - xorriso
+    state: present
+
+#############################
+# 2) Normalizar variables ISO y carpeta en datastore
+#############################
+
 - name: Normalizar variables de ISO (strings)
   set_fact:
-    _iso_url: "{{ ubuntu_iso_url | default('') | string }}"
-    _iso_local: "{{ ubuntu_iso_local | default('') | string }}"
-    _iso_existing: "{{ existing_datastore_iso | default('') | string }}"
-    _iso_dir_raw: "{{ datastore_iso_dir | default('iso') | string }}"
+    ubuntu_iso_url: "{{ (ubuntu_iso_url | default('')) | string }}"
+    ubuntu_iso_local: "{{ (ubuntu_iso_local | default('')) | string }}"
+    ubuntu_iso_existing: "{{ (ubuntu_iso_existing | default('')) | string }}"
 
-# Sanea la carpeta: sin barras iniciales/finales
 - name: Saneado de carpeta destino en datastore
   set_fact:
-    _iso_dir: "{{ _iso_dir_raw | regex_replace('^/+','') | regex_replace('/+$','') }}"
+    _iso_dir: "{{ (datastore_iso_dir | default('ISOS')) | regex_replace('^/+', '') | regex_replace('/+$', '') }}"
 
 - name: Calcular banderas de origen de ISO
   set_fact:
-    use_url: "{{ (_iso_url | length) > 0 }}"
-    use_local: "{{ (_iso_local | length) > 0 }}"
-    use_existing: "{{ (_iso_existing | length) > 0 }}"
+    use_url: "{{ (ubuntu_iso_url | length) > 0 }}"
+    use_local: "{{ (ubuntu_iso_local | length) > 0 }}"
+    use_existing: "{{ (ubuntu_iso_existing | length) > 0 }}"
 
-- name: Validar que exista alguna fuente de ISO
+- name: Validar que exista alguna fuente de ISO (seed o installer)
   assert:
     that:
-      - use_url or use_local or use_existing
-    fail_msg: "Define ubuntu_iso_url o ubuntu_iso_local, o bien existing_datastore_iso ('[DATASTORE] carpeta/archivo.iso')."
+      - (use_url or use_local or use_existing) or true
+    success_msg: "Fuente de ISO definida (o se usará sólo seed)."
+    fail_msg: >
+      Debes definir al menos una fuente de ISO:
+      - ubuntu_iso_url (descargar)
+      - ubuntu_iso_local (ruta local)
+      - ubuntu_iso_existing (ruta en datastore, p.ej. /ISOS/ubuntu.iso)
 
-# 4) Preparar nombre y path del ISO (cuando NO usamos existing)
-- name: Inicializar variables de ISO calculadas
-  set_fact:
-    ubuntu_iso_filename: ""
-    ubuntu_iso_local_path: ""
-  when: not use_existing
+#############################
+# 3) Preparar seed NoCloud (cloud-init)
+#############################
 
-- name: Calcular filename/local_path desde URL
-  set_fact:
-    ubuntu_iso_filename: "{{ _iso_url | basename }}"
-    ubuntu_iso_local_path: "{{ lookup('env','HOME') }}/.cache/ansible/{{ _iso_url | basename }}"
-  when:
-    - not use_existing
-    - use_url
-
-- name: Calcular filename/local_path desde ruta local
-  set_fact:
-    ubuntu_iso_filename: "{{ _iso_local | basename }}"
-    ubuntu_iso_local_path: "{{ _iso_local }}"
-  when:
-    - not use_existing
-    - use_local
-
-- name: Asegurar que filename/local_path quedaron definidos si no usamos existing
-  assert:
-    that:
-      - ubuntu_iso_filename | length > 0
-      - ubuntu_iso_local_path | length > 0
-  when: not use_existing
-
-# 5) Descargar ISO si viene por URL
-- name: Descargar ISO Ubuntu si hay URL
-  delegate_to: localhost
-  when:
-    - use_url
-    - not use_existing
-  get_url:
-    url: "{{ _iso_url }}"
-    dest: "{{ ubuntu_iso_local_path }}"
-    mode: "0644"
-    force: no
-
-# 6) Preparar seed cloud-init local
 - name: Preparar seed cloud-init local
   delegate_to: localhost
   file:
@@ -145,159 +111,142 @@
     state: directory
     mode: "0755"
 
-# --- Gestión robusta de la llave pública ---
+# --- Gestión de llave pública para authorized_keys ---
+
 - name: Resolver ruta de la llave pública (expandir ~)
-  delegate_to: localhost
   set_fact:
-    _pubkey_path: "{{ (ssh_pubkey_path | default('~/.ssh/id_ed25519.pub') | string) | expanduser }}"
+    _pubkey_path: "{{ ssh_pubkey_path | default('~/.ssh/id_rsa.pub') | expanduser }}"
 
 - name: Derivar ruta de la llave privada (si _pubkey_path termina en .pub)
-  delegate_to: localhost
   set_fact:
-    _privkey_path: "{{ _pubkey_path | regex_replace('\\.pub$', '') }}"
+    _privkey_path: "{{ (_pubkey_path.endswith('.pub')) | ternary((_pubkey_path | regex_replace('\\.pub$', '')), _pubkey_path) }}"
 
 - name: Verificar existencia de la llave pública
-  delegate_to: localhost
   stat:
     path: "{{ _pubkey_path }}"
   register: _pubkey_stat
 
 - name: Crear directorio ~/.ssh si hace falta
-  delegate_to: localhost
   file:
-    path: "{{ _privkey_path | regex_replace('/[^/]+$', '') | default(lookup('env','HOME') + '/.ssh', true) }}"
+    path: "~/.ssh"
     state: directory
     mode: "0700"
-  when:
-    - auto_create_ssh_key | default(true)
-    - not _pubkey_stat.stat.exists | default(false)
+  when: not _pubkey_stat.stat.exists and (ssh_generate_key_if_missing | default(false) | bool)
 
 - name: Generar llave SSH si no existe y está permitido
-  delegate_to: localhost
-  command: >
-    ssh-keygen
-    -t {{ (ssh_key_type | default('ed25519')) }}
-    {% if (ssh_key_type | default('ed25519')) == 'rsa' %}-b {{ ssh_key_bits | default(4096) }}{% endif %}
-    -N ""
-    -f "{{ _privkey_path }}"
+  command: "ssh-keygen -t rsa -b 4096 -f {{ _privkey_path }} -N ''"
   args:
     creates: "{{ _privkey_path }}"
-  when:
-    - auto_create_ssh_key | default(true)
-    - not _pubkey_stat.stat.exists | default(false)
+  when: not _pubkey_stat.stat.exists and (ssh_generate_key_if_missing | default(false) | bool)
 
 - name: Re-verificar existencia de la llave pública tras posible generación
-  delegate_to: localhost
   stat:
     path: "{{ _pubkey_path }}"
-  register: _pubkey_stat_after
+  register: _pubkey_stat2
 
 - name: Asegurar que la llave pública existe
   assert:
     that:
-      - _pubkey_stat_after.stat.exists
-      - _pubkey_stat_after.stat.isreg
+      - _pubkey_stat2.stat.exists
     fail_msg: >
       No se encontró la llave pública en {{ _pubkey_path }}.
-      Define 'ssh_pubkey_path' en group_vars/all.yml o permite crearla con 'auto_create_ssh_key: true'.
+      Define 'ssh_pubkey_path' en group_vars/all.yml o crea la llave con:
+      ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa
 
 - name: Cargar llave pública (contenido)
-  delegate_to: localhost
   slurp:
     src: "{{ _pubkey_path }}"
-  register: _pubkey_data
+  register: _pubkey_b64
 
 - name: Guardar contenido de la llave pública en variable
   set_fact:
-    ssh_pubkey_content: "{{ _pubkey_data.content | b64decode | trim }}"
-# --- Fin gestión de llave pública ---
+    ssh_pubkey_content: "{{ _pubkey_b64.content | b64decode | trim }}"
 
-# 7) Calcular máscara en bits SIN filtro 'ipaddr'
+# --- Calcular prefix a partir de netmask sin filtro ipaddr ---
+
 - name: Descomponer netmask en octetos
   set_fact:
-    _octs: "{{ guest_netmask | default('255.255.255.0') | string | split('.') | map('int') | list }}"
+    _mask_octets: "{{ (guest_netmask | default('255.255.255.0')) | split('.') | map('int') | list }}"
 
 - name: Mapa de bits por octeto
   set_fact:
-    _bitlen_map:
-      0: 0
-      128: 1
-      192: 2
-      224: 3
-      240: 4
-      248: 5
-      252: 6
-      254: 7
-      255: 8
+    _bits_map: "{{ [0,128,192,224,240,248,252,254,255] }}"
 
 - name: Calcular prefix a partir del netmask
   set_fact:
-    mask_bits: "{{ (_octs | map('extract', _bitlen_map) | list | sum) | int }}"
+    _prefix: >-
+      {{
+        (
+          (
+            _bits_map.index(_mask_octets[0]) if _mask_octets[0] in _bits_map else 0
+          ) +
+          (
+            _bits_map.index(_mask_octets[1]) if _mask_octets[1] in _bits_map else 0
+          ) +
+          (
+            _bits_map.index(_mask_octets[2]) if _mask_octets[2] in _bits_map else 0
+          ) +
+          (
+            _bits_map.index(_mask_octets[3]) if _mask_octets[3] in _bits_map else 0
+          )
+        )
+      }}
 
 - name: Validar prefix calculado
   assert:
     that:
-      - mask_bits >= 0
-      - mask_bits <= 32
-    fail_msg: "Netmask inválido: {{ guest_netmask }}"
+      - (_prefix | int) > 0
+      - (_prefix | int) <= 32
+    success_msg: "All assertions passed"
+    fail_msg: "Prefix inválido a partir de la máscara '{{ guest_netmask }}'"
 
-# 8) Renderizar user-data/meta-data
-- name: Renderizar user-data/meta-data
+# --- Render de cloud-init ---
+
+- name: user-data
   delegate_to: localhost
-  block:
-    - name: user-data
-      template:
-        src: "templates/user-data.j2"
-        dest: "/tmp/seed-{{ seed_vm_name }}/user-data"
-        mode: "0644"
-      vars:
-        hostname: "{{ seed_vm_name }}"
-        host_ip: "192.168.5.250"   # IP temporal para seed
-        mask_bits: "{{ mask_bits }}"
-        ssh_key: "{{ ssh_pubkey_content }}"
-    - name: meta-data
-      template:
-        src: "templates/meta-data.j2"
-        dest: "/tmp/seed-{{ seed_vm_name }}/meta-data"
-        mode: "0644"
-      vars:
-        hostname: "{{ seed_vm_name }}"
+  template:
+    src: "user-data.j2"
+    dest: "/tmp/seed-{{ seed_vm_name }}/user-data"
+    mode: "0644"
 
-# 9) Crear seed ISO (NoCloud) con mkisofs
+- name: meta-data
+  delegate_to: localhost
+  template:
+    src: "meta-data.j2"
+    dest: "/tmp/seed-{{ seed_vm_name }}/meta-data"
+    mode: "0644"
+
 - name: Crear seed ISO (NoCloud) con mkisofs
   delegate_to: localhost
-  command:
-    cmd: >
-      mkisofs -output /tmp/seed-{{ seed_vm_name }}.iso
-      -V cidata -J -R
-      /tmp/seed-{{ seed_vm_name }}/user-data
-      /tmp/seed-{{ seed_vm_name }}/meta-data
+  command: >
+    mkisofs -output /tmp/seed-{{ seed_vm_name }}.iso
+    -volid cidata -joliet -rock
+    /tmp/seed-{{ seed_vm_name }}/user-data
+    /tmp/seed-{{ seed_vm_name }}/meta-data
+  args:
     creates: "/tmp/seed-{{ seed_vm_name }}.iso"
 
-# 10) Asegurar carpeta en el datastore (por si no existe)
+#############################
+# 4) Subir seed ISO al datastore (con fallback)
+#############################
+
 - name: Crear carpeta de destino en datastore ({{ _iso_dir }})
   community.vmware.vsphere_file:
     hostname: "{{ vcenter_hostname }}"
     username: "{{ vcenter_username }}"
     password: "{{ vcenter_password }}"
     validate_certs: "{{ vcenter_validate_certs }}"
-    port: 443
     datacenter: "{{ vcenter_datacenter }}"
     datastore: "{{ vcenter_datastore }}"
-    path: "{{ _iso_dir }}"
+    path: "/{{ _iso_dir }}"
     state: directory
-  register: _mk_dir
-  failed_when: false
-  changed_when: "_mk_dir is changed"
 
-# 10.5) Debug del path remoto y local
-- name: DEBUG rutas de upload
+- name: DEBUG rutas de upload (seed)
   debug:
     msg:
       local_src: "/tmp/seed-{{ seed_vm_name }}.iso"
       remote_path_required_by_module: "/{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
 
-# 11) Subir seed ISO al datastore — usar vsphere_copy con path **con '/' inicial**
 - name: Subir seed ISO al datastore
   community.vmware.vsphere_copy:
     hostname: "{{ vcenter_hostname }}"
@@ -309,15 +258,15 @@
     datastore: "{{ vcenter_datastore }}"
     src: "/tmp/seed-{{ seed_vm_name }}.iso"
     path: "/{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
-    timeout: 180
-  register: _copy_result
+    timeout: 300
+  register: _copy_seed
   retries: 3
   delay: 4
-  until: _copy_result is succeeded
+  until: _copy_seed is succeeded
   ignore_errors: true
 
-# 11.b) Fallback con API de sesión (si falló vsphere_copy con 404)
-- name: Fallback | Crear sesión REST de vCenter
+# Sesión REST para fallbacks (se crea sólo si hace falta en seed o installer)
+- name: Fallback | Crear sesión REST de vCenter (si falló seed)
   uri:
     url: "https://{{ vcenter_hostname }}/api/session"
     method: POST
@@ -327,104 +276,108 @@
     status_code: 201
     validate_certs: "{{ vcenter_validate_certs }}"
   register: _rest_session
-  when: _copy_result is failed
+  when: _copy_seed is failed
 
-- name: Fallback | Subir ISO via /folder con token REST
+- name: Fallback | Subir seed ISO via /folder con token REST (sin espacios, usando params)
   uri:
-    url: >-
-      https://{{ vcenter_hostname }}/folder/{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso
-      ?dsName={{ vcenter_datastore }}&dcPath={{ vcenter_datacenter }}
+    url: "https://{{ vcenter_hostname }}/folder/{{ _iso_dir | urlencode }}/seed-{{ seed_vm_name | urlencode }}.iso"
     method: PUT
     headers:
       vmware-api-session-id: "{{ _rest_session.json }}"
       Content-Type: "application/octet-stream"
     src: "/tmp/seed-{{ seed_vm_name }}.iso"
+    params:
+      dsName: "{{ vcenter_datastore }}"
+      dcPath: "{{ vcenter_datacenter }}"
     status_code: 200,201
     validate_certs: "{{ vcenter_validate_certs }}"
-    timeout: 300
-  when: _copy_result is failed
+    timeout: 600
+  when: _copy_seed is failed
 
-# 12) Crear VM seed y montar ISOs
-- name: Crear VM seed y montar ISOs
-  community.vmware.vmware_guest:
+#############################
+# 5) (Opcional) Descargar ISO Ubuntu installer y subirla (con fallback)
+#############################
+
+- name: Preparar carpeta de caché para ISOs
+  delegate_to: localhost
+  file:
+    path: "~/.cache/ansible/isos"
+    state: directory
+    mode: "0755"
+
+- name: Definir filename de la ISO de Ubuntu desde la URL
+  set_fact:
+    ubuntu_installer_filename: "{{ ubuntu_iso_url | basename }}"
+  when: (ubuntu_iso_url | default('') | length) > 0
+
+- name: Descargar ISO de Ubuntu (installer) si se definió ubuntu_iso_url
+  delegate_to: localhost
+  get_url:
+    url: "{{ ubuntu_iso_url }}"
+    dest: "~/.cache/ansible/isos/{{ ubuntu_installer_filename }}"
+    mode: "0644"
+    timeout: 1800
+  when: (ubuntu_iso_url | default('') | length) > 0
+
+- name: DEBUG rutas de upload (installer)
+  debug:
+    msg:
+      local_src: "~/.cache/ansible/isos/{{ ubuntu_installer_filename }}"
+      remote_path_required_by_module: "/{{ _iso_dir }}/{{ ubuntu_installer_filename }}"
+  when: (ubuntu_iso_url | default('') | length) > 0
+
+- name: Subir ISO de Ubuntu (installer) al datastore
+  community.vmware.vsphere_copy:
     hostname: "{{ vcenter_hostname }}"
     username: "{{ vcenter_username }}"
     password: "{{ vcenter_password }}"
     validate_certs: "{{ vcenter_validate_certs }}"
-    port: 443
     datacenter: "{{ vcenter_datacenter }}"
-    cluster: "{{ vcenter_cluster }}"
-    folder: "{{ vm_folder | default(omit) }}"
-    name: "{{ seed_vm_name }}"
-    state: poweredon
-    guest_id: "ubuntu64Guest"
-    hardware:
-      memory_mb: "{{ vm_ram_mb }}"
-      num_cpus: "{{ vm_cpu }}"
-      scsi: paravirtual
-      boot_firmware: efi
-      boot_order:
-        - cdrom
-        - disk
-        - ethernet
-    networks:
-      - name: "{{ vcenter_network }}"
-    disk:
-      - size_gb: "{{ vm_disk_gb }}"
-        type: thin
-        autoselect_datastore: false
-        datastore: "{{ vcenter_datastore }}"
-    cdrom:
-      - type: iso
-        iso_path: >-
-          {{
-            use_existing
-              | ternary(
-                  _iso_existing,
-                  "[{{ vcenter_datastore }}] {{ _iso_dir }}/{{ ubuntu_iso_filename }}"
-                )
-          }}
-        controller_number: 0
-        unit_number: 0
-      - type: iso
-        iso_path: "[{{ vcenter_datastore }}] {{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
-        controller_number: 0
-        unit_number: 1
-    wait_for_ip_address: no
+    datastore: "{{ vcenter_datastore }}"
+    src: "~/.cache/ansible/isos/{{ ubuntu_installer_filename }}"
+    path: "/{{ _iso_dir }}/{{ ubuntu_installer_filename }}"
+    timeout: 600
+  register: _copy_installer
+  retries: 3
+  delay: 4
+  until: _copy_installer is succeeded
+  ignore_errors: true
+  when: (ubuntu_iso_url | default('') | length) > 0
 
-# 13) Espera simple a que finalice autoinstall (ajusta según tu entorno)
-- name: Espera razonable a que finalice autoinstall
-  pause:
-    minutes: 15
-
-# 14) Desmontar CDROMs y apagar VM seed
-- name: Desmontar CDROMs
-  community.vmware.vmware_guest:
-    hostname: "{{ vcenter_hostname }}"
-    username: "{{ vcenter_username }}"
+# Reutilizar sesión REST si ya existe; si no, crearla ahora
+- name: Fallback | Crear sesión REST de vCenter (si falló installer)
+  uri:
+    url: "https://{{ vcenter_hostname }}/api/session"
+    method: POST
+    user: "{{ vcenter_username }}"
     password: "{{ vcenter_password }}"
+    force_basic_auth: yes
+    status_code: 201
     validate_certs: "{{ vcenter_validate_certs }}"
-    port: 443
-    datacenter: "{{ vcenter_datacenter }}"
-    name: "{{ seed_vm_name }}"
-    cdrom:
-      - type: none
-        state: present
-        controller_number: 0
-        unit_number: 0
-      - type: none
-        state: present
-        controller_number: 0
-        unit_number: 1
+  register: _rest_session2
+  when:
+    - (ubuntu_iso_url | default('') | length) > 0
+    - _copy_installer is failed
+    - _rest_session is not defined
 
-- name: Apagar VM seed
-  community.vmware.vmware_guest:
-    hostname: "{{ vcenter_hostname }}"
-    username: "{{ vcenter_username }}"
-    password: "{{ vcenter_password }}"
+- name: Fallback | Subir ISO Ubuntu (installer) via /folder con token REST
+  uri:
+    url: "https://{{ vcenter_hostname }}/folder/{{ _iso_dir | urlencode }}/{{ ubuntu_installer_filename | urlencode }}"
+    method: PUT
+    headers:
+      vmware-api-session-id: "{{ (_rest_session.json | default(_rest_session2.json)) }}"
+      Content-Type: "application/octet-stream"
+    src: "~/.cache/ansible/isos/{{ ubuntu_installer_filename }}"
+    params:
+      dsName: "{{ vcenter_datastore }}"
+      dcPath: "{{ vcenter_datacenter }}"
+    status_code: 200,201
     validate_certs: "{{ vcenter_validate_certs }}"
-    port: 443
-    datacenter: "{{ vcenter_datacenter }}"
-    name: "{{ seed_vm_name }}"
-    state: poweredoff
-    state_change_timeout: 1200
+    timeout: 1800
+  when:
+    - (ubuntu_iso_url | default('') | length) > 0
+    - _copy_installer is failed
+
+#############################
+# 6) (Opcional) pasos posteriores: crear VM seed, montar ISOs, etc.
+#############################
