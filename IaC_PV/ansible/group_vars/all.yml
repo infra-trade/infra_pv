@@ -2,44 +2,44 @@
 # Parámetros de vCenter
 # =========================
 
-# Endpoint y credenciales (usuario aquí; contraseña solo en vault.yml)
+# Endpoint de vCenter
 vcenter_hostname: "192.168.5.150"
+
+# Usuario de servicio en vCenter (la contraseña va en vault.yml)
 vcenter_username: "ansible_svc@vsphere.local"
 
 # Nombre EXACTO del Datacenter en vCenter
 vcenter_datacenter: "POPULAR_VALORES"
 
-# Nombre EXACTO del datastore donde está/irá la ISO
+# Nombre EXACTO del datastore donde subimos ISOs
 vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
 
-# Cluster donde trabajamos
+# Cluster donde se desplegarán las VMs
 vcenter_cluster: "PV-CLUSTER"
 
 # Portgroup / Network para las VMs
 vcenter_network: "VLAN-5"
 
-# No validar certificados del vCenter (self-signed)
+# Certs del vCenter (false porque seguramente es self-signed)
 vcenter_validate_certs: false
 
-# Carpeta dentro del datastore para ISOs
-# (en tu caso existe PURESTORAGE_PV_X20R4_VOL_1/ISOS)
+# Carpeta dentro del datastore para las ISOs
 datastore_iso_dir: "ISOS"
 
 # =========================
 # Parámetros de la VM seed
 # =========================
 
-# Nombre de la VM/template seed que vamos a crear
 seed_vm_name: "ubuntu-seed-24-04"
 
-# Usuario Linux que se creará dentro de la seed
+# Usuario Linux dentro de la seed/template
 linux_user: "ansible"
 linux_user_fullname: "Ansible Admin"
 
-# Ruta a tu llave pública desde el host Ansible
+# Llave pública para acceso SSH desde tu nodo Ansible
 ssh_pubkey_path: "/home/ansible/.ssh/id_rsa.pub"
 
-# Config red de la seed (puedes ajustarlo luego si quieres otra IP)
+# Config de red de la seed (puedes ajustarla luego)
 guest_ip: "192.168.5.85"
 guest_netmask: "255.255.255.0"
 guest_gateway: "192.168.5.1"
@@ -51,9 +51,8 @@ guest_dns:
 # ISO de Ubuntu
 # =========================
 
-# URL oficial para descargar la ISO si no existe local
+# Descarga automática desde Internet si no existe localmente
 ubuntu_iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04.1-live-server-amd64.iso"
 
-# Si tuvieras ya una ISO en el datastore y quisieras reutilizarla:
-# ubuntu_iso_existing_datastore_path: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.3-live-server-amd64.iso"
-# Deja comentado esto mientras usamos ubuntu_iso_url.
+# Si algún día quieres usar una ISO ya subida al datastore, descomenta y ajusta:
+# ubuntu_iso_existing_datastore_path: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.1-live-server-amd64.iso"
