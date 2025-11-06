@@ -4,20 +4,22 @@
   connection: local
   gather_facts: false
 
-  # Cargar vault con credenciales (mismo mecanismo que 00-build-template.yml)
-  vars_files:
-    - vars/env/vault.yml
-
   pre_tasks:
     ####################################################################
-    # 1) Resolver endpoint/credenciales desde entorno, group_vars y vault
+    # 1) Cargar credenciales desde vault (opcional, NO obligatorio)
+    ####################################################################
+    - name: Cargar credenciales de vCenter desde vault (si existe)
+      ansible.builtin.include_vars:
+        file: vars/env/vault.yml
+        name: vault_vcenter
+      ignore_errors: true
+      failed_when: false
+
+    ####################################################################
+    # 2) Resolver endpoint/credenciales desde entorno, group_vars y vault
     ####################################################################
     - name: Resolver endpoint/credenciales desde entorno, group_vars y vault
       ansible.builtin.set_fact:
-        # Orden de precedencia:
-        # 1) Variables de entorno VCENTER_*
-        # 2) vault_vcenter.* desde vars/env/vault.yml
-        # 3) Variables ya definidas (group_vars/all.yml)
         vcenter_hostname: >-
           {{
             (lookup('env', 'VCENTER_HOSTNAME') | default('', true))
@@ -42,6 +44,12 @@
         vcenter_hostname: "{{ vcenter_hostname | default('') }}"
         vcenter_username: "{{ vcenter_username | default('') }}"
         vcenter_password: "{{ vcenter_password | default('') }}"
+        vcenter_datacenter: "{{ vcenter_datacenter | default('POPULAR_VALORES') }}"
+        vcenter_datastore: "{{ vcenter_datastore | default('PURESTORAGE_PV_X20R4_VOL_1') }}"
+        vcenter_cluster: "{{ vcenter_cluster | default('PV-CLUSTER') }}"
+        vcenter_network: "{{ vcenter_network | default('VLAN-5') }}"
+        datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
+        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
 
     - name: Mostrar parámetros efectivos de vCenter (debug)
       ansible.builtin.debug:
@@ -49,31 +57,30 @@
           hostname: "{{ vcenter_hostname }}"
           username: "{{ vcenter_username }}"
           password_from_vault: >-
-            {{ 'YES' if (vcenter_password | default('') | length > 0) else 'NO' }}
+            {{ 'YES' if (vcenter_password | length > 0) else 'NO' }}
 
     - name: Validar credenciales y endpoint de vCenter
       ansible.builtin.assert:
         that:
-          - (vcenter_hostname | default('')) | length > 0
-          - (vcenter_username | default('')) | length > 0
-          - (vcenter_password | default('')) | length > 0
+          - (vcenter_hostname | length) > 0
+          - (vcenter_username | length) > 0
+          - (vcenter_password | length) > 0
         fail_msg: >-
-          Faltan parámetros de vCenter. hostname='{{ vcenter_hostname }}'
-          username='{{ vcenter_username }}'.
+          Faltan parámetros de vCenter. hostname='{{ vcenter_hostname }}' username='{{ vcenter_username }}'.
           Define en group_vars/all.yml o en vars/env/vault.yml (vault_vcenter.*)
           o exporta VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD.
         success_msg: "Parámetros de vCenter OK."
 
     ####################################################################
-    # 2) Validar alcance (DC/DS/Cluster/Red)
+    # 3) Validar alcance (DC/DS/Cluster/Red)
     ####################################################################
     - name: Validar que datacenter/datastore/red/cluster están definidos
       ansible.builtin.assert:
         that:
-          - (vcenter_datacenter | default('')) | length > 0
-          - (vcenter_datastore | default('')) | length > 0
-          - (vcenter_network   | default('')) | length > 0
-          - (vcenter_cluster   | default('')) | length > 0
+          - (vcenter_datacenter | length) > 0
+          - (vcenter_datastore | length) > 0
+          - (vcenter_network   | length) > 0
+          - (vcenter_cluster   | length) > 0
         fail_msg: >-
           Faltan vcenter_datacenter/vcenter_datastore/vcenter_network/vcenter_cluster.
           Completa group_vars/all.yml.
@@ -88,17 +95,17 @@
           network: "{{ vcenter_network }}"
 
   ####################################################################
-  # 3) Variables de la VM base
+  # 4) Variables de la VM base
   ####################################################################
   vars:
     vm_name: "ubuntu-24-04-base"
 
     # Recursos
     vm_cpu: 3
-    vm_ram_mb: 32768         # 32 GB
+    vm_ram_mb: 32768        # 32 GB
     vm_disk_gb: 120
 
-    # Red de la VM (ajusta IP si quieres)
+    # Red de la VM (ajusta si quieres IP fija distinta)
     vm_network: "{{ vcenter_network }}"
     vm_ip: "192.168.5.80"
     vm_netmask: "255.255.255.0"
@@ -107,15 +114,15 @@
       - "8.8.8.8"
       - "1.1.1.1"
 
-    # ISOs en el datastore (subidos por 00-build-template.yml)
+    # ISOs en el datastore (cargados por 00-build-template.yml)
     iso_datastore: "{{ vcenter_datastore }}"
-    iso_folder: "{{ datastore_iso_dir | default('ISOS') }}"
+    iso_folder: "{{ datastore_iso_dir }}"
 
     ubuntu_iso_name: "ubuntu-24.04.1-live-server-amd64.iso"
     seed_iso_name: "seed-ubuntu-seed-24-04.iso"
 
   ####################################################################
-  # 4) Crear la VM base
+  # 5) Crear la VM base
   ####################################################################
   tasks:
 
@@ -124,7 +131,7 @@
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
 
         datacenter: "{{ vcenter_datacenter }}"
         cluster: "{{ vcenter_cluster }}"
@@ -173,6 +180,6 @@
         msg:
           - "La VM '{{ vm_name }}' fue creada/actualizada en '{{ vcenter_datacenter }} / {{ vcenter_cluster }}'."
           - "Abre la consola en vCenter y verifica que arranca desde el ISO de Ubuntu + seed."
-          - "Deja que termine el autoinstall (Ubuntu 24.04 + cloud-init)."
+          - "Deja que termine el autoinstall y la configuración cloud-init."
           - "Cuando termine, apaga la VM."
-          - "Luego ejecuta el playbook '02-convert-to-template.yml' para convertirla en template."
+          - "Luego podrás convertirla en template (playbook 02-... si lo tienes definido)."
