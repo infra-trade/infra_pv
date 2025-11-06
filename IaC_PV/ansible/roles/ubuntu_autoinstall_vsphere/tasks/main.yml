@@ -1,11 +1,11 @@
 ---
-# 0) Facts del controlador (saber si es OpenBSD/Debian/RedHat, etc.)
+# 0) Facts del controlador
 - name: Gather facts on localhost
   setup:
   delegate_to: localhost
   become: false
 
-# 1) Instalar dependencias del SO según la plataforma
+# 1) Instalar dependencias del SO según plataforma
 - name: Instalar dependencias en OpenBSD
   package:
     name:
@@ -20,7 +20,7 @@
   apt:
     name:
       - python3-pip
-      - genisoimage   # también provee mkisofs
+      - genisoimage   # provee mkisofs
       - xorriso
     state: present
     update_cache: true

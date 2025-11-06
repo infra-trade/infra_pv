@@ -7,8 +7,15 @@
     - ../vault.yml
 
   vars:
+    # venv para pyvmomi (evita PEP 668 en OpenBSD)
     vmware_venv: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
     venv_python: "{{ vmware_venv + '/bin/python3' }}"
+
+    # 🔒 Forzamos aquí las vars del ISO para evitar "undefined"
+    ubuntu_iso_url: ""          # deja vacío (usaremos el ISO que ya está en el datastore)
+    ubuntu_iso_local: ""        # si quisieras usar un ISO local, coloca aquí la ruta absoluta
+    datastore_iso_dir: "ISOS"   # carpeta del datastore donde están los ISOs
+    existing_datastore_iso: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.3-live-server-amd64.iso"
 
   pre_tasks:
     - name: Crear venv para módulos VMware (si no existe)
