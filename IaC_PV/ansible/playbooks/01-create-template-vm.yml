@@ -4,8 +4,66 @@
   connection: local
   gather_facts: false
 
+  pre_tasks:
+    - name: Cargar credenciales de vCenter desde vault (si existe)
+      ansible.builtin.include_vars:
+        file: vars/env/vault.yml
+        name: vault_vcenter
+      ignore_errors: true
+
+    - name: Resolver endpoint/credenciales desde entorno, group_vars y vault
+      ansible.builtin.set_fact:
+        vcenter_hostname: >-
+          {{
+            lookup('env', 'VCENTER_HOSTNAME')
+            | default(vcenter_hostname | default(vault_vcenter.vcenter_hostname | default('')), true)
+          }}
+        vcenter_username: >-
+          {{
+            lookup('env', 'VCENTER_USERNAME')
+            | default(vcenter_username | default(vault_vcenter.vcenter_username | default('')), true)
+          }}
+        vcenter_password: >-
+          {{
+            lookup('env', 'VCENTER_PASSWORD')
+            | default(vcenter_password | default(vault_vcenter.vcenter_password | default('')), true)
+          }}
+
+    - name: Validar credenciales y endpoint de vCenter
+      ansible.builtin.assert:
+        that:
+          - (vcenter_hostname | default('')) | length > 0
+          - (vcenter_username | default('')) | length > 0
+          - (vcenter_password | default('')) | length > 0
+        fail_msg: >-
+          Faltan parámetros de vCenter. hostname='{{ vcenter_hostname | default("") }}'
+          username='{{ vcenter_username | default("") }}'.
+          Define en group_vars/all.yml o en vars/env/vault.yml
+          (o exporta VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD).
+
+    - name: Validar que datacenter/datastore/red/cluster están definidos
+      ansible.builtin.assert:
+        that:
+          - (vcenter_datacenter | default('')) | length > 0
+          - (vcenter_datastore | default('')) | length > 0
+          - (vcenter_network   | default('')) | length > 0
+          - (vcenter_cluster   | default('')) | length > 0
+        fail_msg: >-
+          Faltan vcenter_datacenter/vcenter_datastore/vcenter_network/vcenter_cluster.
+          Completa iac/ansible/group_vars/all.yml.
+
+    - name: Mostrar parámetros efectivos de vCenter (debug)
+      ansible.builtin.debug:
+        msg:
+          hostname: "{{ vcenter_hostname }}"
+          username: "{{ vcenter_username }}"
+          datacenter: "{{ vcenter_datacenter }}"
+          datastore: "{{ vcenter_datastore }}"
+          cluster: "{{ vcenter_cluster }}"
+          network: "{{ vcenter_network }}"
+
   vars:
-    # Nombre de la VM base que se instalará vía autoinstall
+    # Nombre de la VM base
     vm_name: "ubuntu-24-04-base"
 
     # Recursos de la VM base
@@ -17,25 +75,25 @@
     vm_network: "{{ vcenter_network }}"
     vm_ip: "192.168.5.80"   # Ajusta a una IP libre en tu red
     vm_netmask: "255.255.255.0"
-    vm_gw: "192.168.5.1"
+    vm_gw: "192.168.5.252"
     vm_dns:
-      - "8.8.8.8"
-      - "1.1.1.1"
+      - "192.168.10.2"
+      - "192.168.10.50"
 
-    # Datastore / carpeta donde ya está el ISO de Ubuntu y el seed ISO
+    # Datastore / carpeta donde ya está el ISO Ubuntu y el seed ISO
     iso_datastore: "{{ vcenter_datastore }}"
-    iso_folder: "{{ datastore_iso_dir }}"
+    iso_folder: "{{ datastore_iso_dir | default('ISOS') }}"
     ubuntu_iso_name: "ubuntu-24.04.1-live-server-amd64.iso"
     seed_iso_name: "seed-ubuntu-seed-24-04.iso"
 
   tasks:
-
     - name: Crear VM base para autoinstall
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs }}"
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+
         datacenter: "{{ vcenter_datacenter }}"
         cluster: "{{ vcenter_cluster }}"
         name: "{{ vm_name }}"
@@ -75,14 +133,14 @@
       register: vm_create
 
     - name: Mostrar resultado creación VM base
-      debug:
+      ansible.builtin.debug:
         var: vm_create
 
     - name: Instrucciones siguientes pasos
-      debug:
+      ansible.builtin.debug:
         msg:
-          - "La VM '{{ vm_name }}' fue creada y encendida usando installer + seed ISO."
+          - "La VM '{{ vm_name }}' fue creada y encendida con el installer + seed ISO."
           - "1) Abre la consola en vCenter y verifica que el autoinstall está corriendo."
           - "2) Espera a que termine la instalación automática."
           - "3) Apaga la VM cuando termine."
-          - "4) Ejecuta luego el playbook 02-convert-to-template.yml para convertirla en template."
+          - "4) Después ejecuta el playbook 02-convert-to-template.yml para convertir esta VM en template."
