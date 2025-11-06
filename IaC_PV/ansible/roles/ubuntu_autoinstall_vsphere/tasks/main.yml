@@ -1,8 +1,17 @@
 ---
 # tasks/main.yml — ubuntu_autoinstall_vsphere (completo, con descarga opcional de ISO installer)
+# Corrección: garantizar facts + when robustos con ansible_facts.os_family
 
 #############################
-# 0) Sanity check vCenter
+# 0) Hechos del host local
+#############################
+- name: Gather facts on localhost
+  setup:
+  delegate_to: localhost
+  become: false
+
+#############################
+# 1) Sanity check vCenter
 #############################
 
 - name: Probar conexión a vCenter (sanity check)
@@ -34,11 +43,11 @@
     fail_msg: "Faltan 'vcenter_datacenter' o 'vcenter_datastore'. Verifica iac/ansible/group_vars/all.yml (o -e / vault) antes de continuar."
 
 #############################
-# 1) Dependencias locales (OpenBSD / Linux)
+# 2) Dependencias locales (OpenBSD / Linux)
 #############################
 
 - name: Instalar dependencias en OpenBSD
-  when: ansible_os_family | lower == 'openbsd'
+  when: ((ansible_facts.os_family | default('')) | lower) == 'openbsd'
   block:
     - name: Verificar mkisofs en OpenBSD
       stat:
@@ -51,7 +60,7 @@
       when: not _mkisofs_stat.stat.exists
 
 - name: Instalar dependencias en Debian/Ubuntu
-  when: ansible_os_family | lower == 'debian'
+  when: ((ansible_facts.os_family | default('')) | lower) == 'debian'
   become: yes
   apt:
     name:
@@ -61,7 +70,7 @@
     update_cache: yes
 
 - name: Instalar dependencias en RedHat/CentOS
-  when: ansible_os_family | lower in ['redhat', 'rhel']
+  when: ((ansible_facts.os_family | default('')) | lower) in ['redhat', 'rhel']
   become: yes
   yum:
     name:
@@ -70,7 +79,7 @@
     state: present
 
 #############################
-# 2) Normalizar variables ISO y carpeta en datastore
+# 3) Normalizar variables ISO y carpeta en datastore
 #############################
 
 - name: Normalizar variables de ISO (strings)
@@ -101,7 +110,7 @@
       - ubuntu_iso_existing (ruta en datastore, p.ej. /ISOS/ubuntu.iso)
 
 #############################
-# 3) Preparar seed NoCloud (cloud-init)
+# 4) Preparar seed NoCloud (cloud-init)
 #############################
 
 - name: Preparar seed cloud-init local
@@ -227,7 +236,7 @@
     creates: "/tmp/seed-{{ seed_vm_name }}.iso"
 
 #############################
-# 4) Subir seed ISO al datastore (con fallback)
+# 5) Subir seed ISO al datastore (con fallback)
 #############################
 
 - name: Crear carpeta de destino en datastore ({{ _iso_dir }})
@@ -289,13 +298,13 @@
     params:
       dsName: "{{ vcenter_datastore }}"
       dcPath: "{{ vcenter_datacenter }}"
-    status_code: 200,201
+    status_code: [200, 201]
     validate_certs: "{{ vcenter_validate_certs }}"
     timeout: 600
   when: _copy_seed is failed
 
 #############################
-# 5) (Opcional) Descargar ISO Ubuntu installer y subirla (con fallback)
+# 6) (Opcional) Descargar ISO Ubuntu installer y subirla (con fallback)
 #############################
 
 - name: Preparar carpeta de caché para ISOs
@@ -371,7 +380,7 @@
     params:
       dsName: "{{ vcenter_datastore }}"
       dcPath: "{{ vcenter_datacenter }}"
-    status_code: 200,201
+    status_code: [200, 201]
     validate_certs: "{{ vcenter_validate_certs }}"
     timeout: 1800
   when:
@@ -379,5 +388,5 @@
     - _copy_installer is failed
 
 #############################
-# 6) (Opcional) pasos posteriores: crear VM seed, montar ISOs, etc.
+# 7) (Opcional) pasos posteriores: crear VM seed, montar ISOs, etc.
 #############################
