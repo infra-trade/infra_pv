@@ -1,4 +1,4 @@
-# === vCenter ===
+# === vCenter (tus valores reales) ===
 vcenter_hostname: "192.168.5.151"
 vcenter_datacenter: "POPULAR VALORES"
 vcenter_cluster: "PV-CLUSTER"
@@ -13,37 +13,29 @@ vm_folder: "Infra"
 seed_vm_name: "ubuntu-seed-24-04"
 template_name: "ubuntu-24-04-template"
 
-# === Especificaciones comunes de VM ===
+# === Especificaciones de la VM seed ===
 vm_cpu: 3
 vm_ram_mb: 32768
 vm_disk_gb: 120
+
+# === Red ===
 guest_domain: "localdomain"
 guest_gateway: "192.168.5.1"
 guest_netmask: "255.255.255.0"
 guest_dns_servers: ["192.168.5.1", "8.8.8.8"]
-net_interface: "ens160"     # cambia si tu interfaz difiere
+net_interface: "ens160"
 
 # === Ubuntu ISO ===
-# Si YA tienes el ISO en el datastore, usa existing_datastore_iso y deja url/local vacíos
-ubuntu_iso_url: ""          # ej: "https://releases.ubuntu.com/24.04/ubuntu-24.04.3-live-server-amd64.iso"
-ubuntu_iso_local: ""        # ej: "/home/ansible/isos/ubuntu-24.04.3-live-server-amd64.iso"
-datastore_iso_dir: "ISOS"   # carpeta en el datastore
-
-# 👉 ISO EXISTENTE en el datastore (TU RUTA EXACTA en vSphere)
+# usamos ISO ya existente en datastore:
+ubuntu_iso_url: ""
+ubuntu_iso_local: ""
+datastore_iso_dir: "ISOS"
 existing_datastore_iso: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.3-live-server-amd64.iso"
 
 # === SSH (solo keys) ===
-ssh_pubkey_path: "~/.ssh/id_rsa.pub"
+ssh_pubkey_path: "~/.ssh/id_ed25519.pub"
 disable_password_ssh: true
-
-# === Usuario Linux inicial ===
 linux_user: "ubuntu"
 
-# === VMs finales ===
-infra_hosts:
-  - name: "infra-master"
-    ip: "192.168.5.85"
-  - name: "infra-nodo1"
-    ip: "192.168.5.86"
-  - name: "infra-nodo2"
-    ip: "192.168.5.87"
+# === Credenciales (en vault) ===
+# vault_vcenter_username y vault_vcenter_password deben estar en vault.yml cifrado
