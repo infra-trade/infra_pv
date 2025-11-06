@@ -5,7 +5,7 @@
   delegate_to: localhost
   become: false
 
-# 1) Probar conexión a vCenter (sanity check) — robusto
+# 1) Probar conexión a vCenter (sanity check)
 - name: Probar conexión a vCenter (sanity check)
   community.vmware.vmware_about_info:
     hostname: "{{ vcenter_hostname }}"
@@ -43,7 +43,7 @@
   package:
     name:
       - py3-pip
-      - cdrtools      # provee mkisofs
+      - cdrtools      # mkisofs
       - xorriso
     state: present
   become: true
@@ -53,7 +53,7 @@
   apt:
     name:
       - python3-pip
-      - genisoimage   # provee mkisofs
+      - genisoimage   # mkisofs
       - xorriso
     state: present
     update_cache: true
@@ -76,7 +76,12 @@
     _iso_url: "{{ ubuntu_iso_url | default('') | string }}"
     _iso_local: "{{ ubuntu_iso_local | default('') | string }}"
     _iso_existing: "{{ existing_datastore_iso | default('') | string }}"
-    _iso_dir: "{{ datastore_iso_dir | default('iso') | string }}"
+    _iso_dir_raw: "{{ datastore_iso_dir | default('iso') | string }}"
+
+# Sanea la carpeta: sin barras iniciales/finales
+- name: Saneado de carpeta destino en datastore
+  set_fact:
+    _iso_dir: "{{ _iso_dir_raw | regex_replace('^/+','') | regex_replace('/+$','') }}"
 
 - name: Calcular banderas de origen de ISO
   set_fact:
@@ -279,13 +284,20 @@
     port: 443
     datacenter: "{{ vcenter_datacenter }}"
     datastore: "{{ vcenter_datastore }}"
-    path: "{{ _iso_dir }}"          # sin "/" inicial
+    path: "{{ _iso_dir }}"
     state: directory
   register: _mk_dir
   failed_when: false
   changed_when: "_mk_dir is changed"
 
-# 11) Subir seed ISO al datastore — usar vsphere_copy + reintentos
+# 10.5) Debug del path remoto y local
+- name: DEBUG rutas de upload
+  debug:
+    msg:
+      local_src: "/tmp/seed-{{ seed_vm_name }}.iso"
+      remote_path_required_by_module: "/{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
+
+# 11) Subir seed ISO al datastore — usar vsphere_copy con path **con '/' inicial**
 - name: Subir seed ISO al datastore
   community.vmware.vsphere_copy:
     hostname: "{{ vcenter_hostname }}"
@@ -296,12 +308,41 @@
     datacenter: "{{ vcenter_datacenter }}"
     datastore: "{{ vcenter_datastore }}"
     src: "/tmp/seed-{{ seed_vm_name }}.iso"
-    path: "{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
-    timeout: 120
+    path: "/{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
+    timeout: 180
   register: _copy_result
   retries: 3
-  delay: 3
+  delay: 4
   until: _copy_result is succeeded
+  ignore_errors: true
+
+# 11.b) Fallback con API de sesión (si falló vsphere_copy con 404)
+- name: Fallback | Crear sesión REST de vCenter
+  uri:
+    url: "https://{{ vcenter_hostname }}/api/session"
+    method: POST
+    user: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    force_basic_auth: yes
+    status_code: 201
+    validate_certs: "{{ vcenter_validate_certs }}"
+  register: _rest_session
+  when: _copy_result is failed
+
+- name: Fallback | Subir ISO via /folder con token REST
+  uri:
+    url: >-
+      https://{{ vcenter_hostname }}/folder/{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso
+      ?dsName={{ vcenter_datastore }}&dcPath={{ vcenter_datacenter }}
+    method: PUT
+    headers:
+      vmware-api-session-id: "{{ _rest_session.json }}"
+      Content-Type: "application/octet-stream"
+    src: "/tmp/seed-{{ seed_vm_name }}.iso"
+    status_code: 200,201
+    validate_certs: "{{ vcenter_validate_certs }}"
+    timeout: 300
+  when: _copy_result is failed
 
 # 12) Crear VM seed y montar ISOs
 - name: Crear VM seed y montar ISOs
