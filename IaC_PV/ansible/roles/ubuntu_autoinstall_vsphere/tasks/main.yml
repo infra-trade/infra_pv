@@ -5,7 +5,24 @@
   delegate_to: localhost
   become: false
 
-# 1) Instalar dependencias del SO según plataforma
+# 1) Probar conexión a vCenter (detener aquí si falla autenticación)
+- name: Probar conexión a vCenter (sanity check)
+  community.vmware.vmware_about_info:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs }}"
+    port: 443
+  register: _vc_info
+
+- name: Validar respuesta de vCenter
+  assert:
+    that:
+      - _vc_info.instance is defined
+      - _vc_info.instance.about is defined
+    fail_msg: "No se pudo autenticar en vCenter con las credenciales provistas. Revisa usuario/clave/dominio o permisos."
+
+# 2) Instalar dependencias del SO según plataforma
 - name: Instalar dependencias en OpenBSD
   package:
     name:
@@ -37,7 +54,7 @@
   become: true
   when: ansible_facts['os_family'] == 'RedHat'
 
-# 2) Normalizar variables y banderas (evita problemas de tipos)
+# 3) Normalizar variables y banderas (evita problemas de tipos)
 - name: Normalizar variables de ISO (strings)
   set_fact:
     _iso_url: "{{ ubuntu_iso_url | default('') | string }}"
@@ -57,7 +74,7 @@
       - use_url or use_local or use_existing
     fail_msg: "Define ubuntu_iso_url o ubuntu_iso_local, o bien existing_datastore_iso ('[DATASTORE] carpeta/archivo.iso')."
 
-# 3) Preparar nombre y path del ISO (cuando NO usamos existing)
+# 4) Preparar nombre y path del ISO (cuando NO usamos existing)
 - name: Inicializar variables de ISO calculadas
   set_fact:
     ubuntu_iso_filename: ""
@@ -87,7 +104,7 @@
       - ubuntu_iso_local_path | length > 0
   when: not use_existing
 
-# 4) Descargar ISO si viene por URL
+# 5) Descargar ISO si viene por URL
 - name: Descargar ISO Ubuntu si hay URL
   delegate_to: localhost
   when:
@@ -98,19 +115,6 @@
     dest: "{{ ubuntu_iso_local_path }}"
     mode: "0644"
     force: no
-
-# 5) Subir ISO Ubuntu al datastore (si no usamos el existente)
-- name: Subir ISO Ubuntu al datastore
-  community.vmware.vsphere_copy:
-    hostname: "{{ vcenter_hostname }}"
-    username: "{{ vcenter_username }}"
-    password: "{{ vcenter_password }}"
-    validate_certs: "{{ vcenter_validate_certs }}"
-    src: "{{ ubuntu_iso_local_path }}"
-    datacenter: "{{ vcenter_datacenter }}"
-    datastore: "{{ vcenter_datastore }}"
-    path: "{{ _iso_dir }}/{{ ubuntu_iso_filename }}"
-  when: not use_existing
 
 # 6) Preparar seed cloud-init local
 - name: Preparar seed cloud-init local
@@ -187,7 +191,7 @@
     ssh_pubkey_content: "{{ _pubkey_data.content | b64decode | trim }}"
 # --- Fin gestión de llave pública ---
 
-# 7) Calcular máscara en bits SIN el filtro 'ipaddr'
+# 7) Calcular máscara en bits SIN filtro 'ipaddr'
 - name: Descomponer netmask en octetos
   set_fact:
     _octs: "{{ guest_netmask | default('255.255.255.0') | string | split('.') | map('int') | list }}"
@@ -249,25 +253,40 @@
       /tmp/seed-{{ seed_vm_name }}/meta-data
     creates: "/tmp/seed-{{ seed_vm_name }}.iso"
 
-# 10) Subir seed ISO al datastore
+# 10) Asegurar carpeta en el datastore (por si no existe)
+- name: Crear carpeta de destino en datastore ({{ _iso_dir }})
+  community.vmware.vsphere_file:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs }}"
+    port: 443
+    datacenter: "{{ vcenter_datacenter }}"
+    datastore: "{{ vcenter_datastore }}"
+    path: "/{{ _iso_dir }}"
+    state: directory
+
+# 11) Subir seed ISO al datastore
 - name: Subir seed ISO al datastore
   community.vmware.vsphere_copy:
     hostname: "{{ vcenter_hostname }}"
     username: "{{ vcenter_username }}"
     password: "{{ vcenter_password }}"
     validate_certs: "{{ vcenter_validate_certs }}"
+    port: 443
     src: "/tmp/seed-{{ seed_vm_name }}.iso"
     datacenter: "{{ vcenter_datacenter }}"
     datastore: "{{ vcenter_datastore }}"
     path: "{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
 
-# 11) Crear VM seed y montar ISOs
+# 12) Crear VM seed y montar ISOs
 - name: Crear VM seed y montar ISOs
   community.vmware.vmware_guest:
     hostname: "{{ vcenter_hostname }}"
     username: "{{ vcenter_username }}"
     password: "{{ vcenter_password }}"
     validate_certs: "{{ vcenter_validate_certs }}"
+    port: 443
     datacenter: "{{ vcenter_datacenter }}"
     cluster: "{{ vcenter_cluster }}"
     folder: "{{ vm_folder | default(omit) }}"
@@ -308,18 +327,19 @@
         unit_number: 1
     wait_for_ip_address: no
 
-# 12) Espera simple a que finalice autoinstall (ajusta según tu entorno)
+# 13) Espera simple a que finalice autoinstall (ajusta según tu entorno)
 - name: Espera razonable a que finalice autoinstall
   pause:
     minutes: 15
 
-# 13) Desmontar CDROMs y apagar VM seed
+# 14) Desmontar CDROMs y apagar VM seed
 - name: Desmontar CDROMs
   community.vmware.vmware_guest:
     hostname: "{{ vcenter_hostname }}"
     username: "{{ vcenter_username }}"
     password: "{{ vcenter_password }}"
     validate_certs: "{{ vcenter_validate_certs }}"
+    port: 443
     datacenter: "{{ vcenter_datacenter }}"
     name: "{{ seed_vm_name }}"
     cdrom:
@@ -338,6 +358,7 @@
     username: "{{ vcenter_username }}"
     password: "{{ vcenter_password }}"
     validate_certs: "{{ vcenter_validate_certs }}"
+    port: 443
     datacenter: "{{ vcenter_datacenter }}"
     name: "{{ seed_vm_name }}"
     state: poweredoff
