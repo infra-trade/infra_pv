@@ -5,26 +5,31 @@
   gather_facts: false
 
   vars:
+    # Nombre de la VM base que se instalará vía autoinstall
     vm_name: "ubuntu-24-04-base"
-    vm_cpu: 3
-    vm_ram_mb: 32768       # 32 GB
-    vm_disk_gb: 120
-    vm_network: "{{ vcenter_network }}"
-    # IMPORTANTE: esta IP es solo para la VM base durante autoinstall.
-    # La puedes ajustar como una IP libre de tu red.
-    vm_ip: "192.168.5.80"
-    vm_netmask: "255.255.255.0"
-    vm_gw: "192.168.5.252"
-    vm_dns: ["192.168.10.2", "192.168.10.50"]
 
-    # Rutas en datastore
+    # Recursos de la VM base
+    vm_cpu: 3
+    vm_ram_mb: 32768        # 32 GB
+    vm_disk_gb: 120
+
+    # Red de la VM base (IP temporal para instalación)
+    vm_network: "{{ vcenter_network }}"
+    vm_ip: "192.168.5.80"   # Ajusta a una IP libre en tu red
+    vm_netmask: "255.255.255.0"
+    vm_gw: "192.168.5.1"
+    vm_dns:
+      - "8.8.8.8"
+      - "1.1.1.1"
+
+    # Datastore / carpeta donde ya está el ISO de Ubuntu y el seed ISO
     iso_datastore: "{{ vcenter_datastore }}"
     iso_folder: "{{ datastore_iso_dir }}"
     ubuntu_iso_name: "ubuntu-24.04.1-live-server-amd64.iso"
     seed_iso_name: "seed-ubuntu-seed-24-04.iso"
 
   tasks:
-    - name: Crear VM base para autoinstall
+
     - name: Crear VM base para autoinstall
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
@@ -36,13 +41,16 @@
         name: "{{ vm_name }}"
         state: poweredon
         guest_id: ubuntu64Guest
+
+        hardware:
+          num_cpus: "{{ vm_cpu }}"
+          memory_mb: "{{ vm_ram_mb }}"
+
         disk:
           - size_gb: "{{ vm_disk_gb }}"
             type: thin
             datastore: "{{ vcenter_datastore }}"
-        hardware:
-          memory_mb: "{{ vm_ram_mb }}"
-          num_cpus: "{{ vm_cpu }}"
+
         networks:
           - name: "{{ vm_network }}"
             type: static
@@ -50,6 +58,7 @@
             netmask: "{{ vm_netmask }}"
             gateway: "{{ vm_gw }}"
             dns_servers: "{{ vm_dns }}"
+
         cdrom:
           - type: iso
             iso_path: "[{{ iso_datastore }}] {{ iso_folder }}/{{ ubuntu_iso_name }}"
@@ -57,20 +66,23 @@
           - type: iso
             iso_path: "[{{ iso_datastore }}] {{ iso_folder }}/{{ seed_iso_name }}"
             state: present
+
         boot:
           boot_order:
             - cdrom
             - disk
+
       register: vm_create
 
     - name: Mostrar resultado creación VM base
       debug:
         var: vm_create
 
-    - name: Nota manual - esperar a que termine el autoinstall
+    - name: Instrucciones siguientes pasos
       debug:
         msg:
-          - "La VM '{{ vm_name }}' se creó y está arrancando con autoinstall."
-          - "Ahora ve a vCenter, abre la consola de la VM y espera a que termine la instalación."
-          - "Cuando termine, la VM quedará con Ubuntu 24.04 instalado y tu llave SSH."
-          - "Luego apaga la VM desde el SO o vCenter y continúa con el siguiente playbook para convertirla en template."
+          - "La VM '{{ vm_name }}' fue creada y encendida usando installer + seed ISO."
+          - "1) Abre la consola en vCenter y verifica que el autoinstall está corriendo."
+          - "2) Espera a que termine la instalación automática."
+          - "3) Apaga la VM cuando termine."
+          - "4) Ejecuta luego el playbook 02-convert-to-template.yml para convertirla en template."
