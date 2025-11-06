@@ -23,7 +23,6 @@
         - set_fact:
             ansible_python_interpreter: "{{ venv_python }}"
 
-    # Resolver credenciales igual que en tu play principal
     - name: Resolver endpoint/usuario/clave
       no_log: false
       vars:
@@ -32,13 +31,11 @@
         _pass_env: "{{ lookup('env','VCENTER_PASSWORD') | default('', true) }}"
       set_fact:
         _vc_host: >-
-          {{ (vcenter_hostname | default('', true)) | default(_host_env, true) | default('', true) }}
+          {{ (vcenter_hostname | default('', true)) | default(_host_env, true) | default(vault_vcenter_hostname | default('', true), true) | default('', true) }}
         _vc_user: >-
-          {{ (vcenter_username | default('', true)) | default(_user_env, true) |
-             default(vault_vcenter_username | default('', true), true) | default('', true) }}
+          {{ (vcenter_username | default('', true)) | default(_user_env, true) | default(vault_vcenter_username | default('', true), true) | default('', true) }}
         _vc_pass: >-
-          {{ (vcenter_password | default('', true)) | default(_pass_env, true) |
-             default(vault_vcenter_password | default('', true), true) | default('', true) }}
+          {{ (vcenter_password | default('', true)) | default(_pass_env, true) | default(vault_vcenter_password | default('', true), true) | default('', true) }}
 
     - name: Mostrar qué usuario/host se usarán (sin la contraseña)
       debug:
@@ -65,6 +62,11 @@
         port: 443
       register: vc_info
 
-    - name: Éxito
+    - name: Imprimir claves del resultado (para ver estructura)
       debug:
-        var: vc_info.instance.about
+        msg:
+          keys: "{{ vc_info.keys() | list }}"
+
+    - name: Imprimir 'about' si existe (compatibilidad)
+      debug:
+        msg: "{{ vc_info.about | default(vc_info.instance.about | default({})) }}"
