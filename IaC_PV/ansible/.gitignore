@@ -1,0 +1,13 @@
+# Ansible
+*.retry
+.vagrant/
+__pycache__/
+# Vault password files (NO subir)
+.vault_pass
+vault.pass
+vault_password.txt
+# Claves/credenciales
+*.pem
+*.key
+*.pfx
+*.kube/config
