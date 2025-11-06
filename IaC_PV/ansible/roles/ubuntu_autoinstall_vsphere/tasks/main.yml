@@ -1,58 +1,258 @@
-TASK [ubuntu_autoinstall_vsphere : Calcular prefix a partir del netmask] ************************
-ok: [localhost]
+---
+# roles/ubuntu_autoinstall_vsphere/tasks/main.yml
 
-TASK [ubuntu_autoinstall_vsphere : Validar prefix calculado] ************************************
-ok: [localhost] => {
-    "changed": false,
-    "msg": "All assertions passed"
-}
+- name: Gather facts on localhost
+  ansible.builtin.setup:
+  delegate_to: localhost
+  run_once: true
 
-TASK [ubuntu_autoinstall_vsphere : user-data] ***************************************************
-ok: [localhost]
+# 1) Sanity check contra vCenter
+- name: Probar conexión a vCenter (sanity check)
+  community.vmware.vmware_about_info:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+  delegate_to: localhost
+  register: _vc_info
+  run_once: true
 
-TASK [ubuntu_autoinstall_vsphere : meta-data] ***************************************************
-ok: [localhost]
+- name: Validar respuesta de vCenter (no fallará si el módulo ya lanzó error)
+  ansible.builtin.assert:
+    that:
+      - _vc_info is not failed
+    success_msg: "Conexión a vCenter OK."
+    fail_msg: "No se pudo conectar a vCenter. Revisa host/usuario/clave."
+  run_once: true
 
-TASK [ubuntu_autoinstall_vsphere : Crear seed ISO (NoCloud) con mkisofs] ************************
-changed: [localhost]
+# 2) Normalizar datacenter/datastore desde vars/extra_vars
+- name: DEBUG vCenter scope (datacenter/datastore)
+  ansible.builtin.debug:
+    msg:
+      datacenter: "{{ vcenter_datacenter | default('') }}"
+      datastore: "{{ vcenter_datastore | default('') }}"
+  run_once: true
 
-TASK [ubuntu_autoinstall_vsphere : Calcular ruta remota para seed ISO] **************************
-ok: [localhost]
+- name: Validar datacenter y datastore no vacíos
+  ansible.builtin.assert:
+    that:
+      - (vcenter_datacenter | default('') | length) > 0
+      - (vcenter_datastore | default('')  | length) > 0
+    fail_msg: "Faltan 'vcenter_datacenter' o 'vcenter_datastore'. Verifica group_vars/all.yml o -e."
+  run_once: true
 
-TASK [ubuntu_autoinstall_vsphere : DEBUG rutas de upload] ***************************************
-ok: [localhost] => {
-    "msg": {
-        "datacenter": "POPULAR",
-        "datastore": "PURESTORAGE_PV_X20R4_VOL_1",
-        "local_src": "/tmp/seed-ubuntu-seed-24-04.iso",
-        "remote_path": "  ISOS\n/seed-ubuntu-seed-24-04.iso "
-    }
-}
+# Guardamos versiones limpias
+- name: Fijar variables internas de DC/DS
+  ansible.builtin.set_fact:
+    _dc: "{{ vcenter_datacenter | trim }}"
+    _ds: "{{ vcenter_datastore  | trim }}"
+  run_once: true
 
-TASK [ubuntu_autoinstall_vsphere : Verificar que el seed ISO local existe] **********************
-ok: [localhost]
+# 3) Verificar mkisofs en OpenBSD (no instalamos paquetes aquí)
+- name: Verificar mkisofs en OpenBSD
+  ansible.builtin.command: which mkisofs
+  register: _mkisofs_check
+  changed_when: false
+  failed_when: _mkisofs_check.rc != 0
+  when: ansible_facts.os_family is defined and (ansible_facts.os_family | lower == 'openbsd')
+  delegate_to: localhost
+  run_once: true
 
-TASK [ubuntu_autoinstall_vsphere : Asegurar que el seed ISO local existe] ***********************
-ok: [localhost] => {
-    "changed": false,
-    "msg": "Seed ISO local generado correctamente."
-}
+# 4) Normalizar variables de ISO
+- name: Normalizar variables de ISO (strings)
+  ansible.builtin.set_fact:
+    ubuntu_iso_url_str: "{{ (ubuntu_iso_url | default('')) | trim }}"
+    ubuntu_iso_local_str: "{{ (ubuntu_iso_local | default('')) | trim }}"
+    datastore_iso_dir_str: "{{ (datastore_iso_dir | default('ISOS')) | trim }}"
+  run_once: true
 
-TASK [ubuntu_autoinstall_vsphere : Subir seed ISO al datastore] *********************************
-FAILED - RETRYING: [localhost]: Subir seed ISO al datastore (3 retries left).
-FAILED - RETRYING: [localhost]: Subir seed ISO al datastore (2 retries left).
-FAILED - RETRYING: [localhost]: Subir seed ISO al datastore (1 retries left).
-[ERROR]: Task failed: Module failed: HTTP Error 404: Not Found
-Origin: /home/ansible/infra_pv/IaC_PV/IaC_PV/ansible/roles/ubuntu_autoinstall_vsphere/tasks/main.yml:266:3
+- name: Saneado de carpeta destino en datastore
+  ansible.builtin.set_fact:
+    _iso_dir: "{{ datastore_iso_dir_str }}"
+  run_once: true
 
-264     success_msg: "Seed ISO local generado correctamente."
-265
-266 - name: Subir seed ISO al datastore
-      ^ column 3
+# 5) Determinar si hay fuente de ISO (opcional; para ahora nos basta seed ISO)
+- name: Calcular banderas de origen de ISO
+  ansible.builtin.set_fact:
+    has_iso_url: "{{ ubuntu_iso_url_str != '' }}"
+    has_iso_local: "{{ ubuntu_iso_local_str != '' }}"
+  run_once: true
 
-fatal: [localhost]: FAILED! => {"attempts": 3, "changed": false, "failed_when_result": true, "msg": "HTTP Error 404: Not Found"}
+- name: Validar que exista alguna fuente de ISO (seed o installer)
+  ansible.builtin.assert:
+    that:
+      - has_iso_url or has_iso_local or true   # permitimos sólo seed ISO
+    success_msg: "Fuente de ISO definida (o se usará sólo seed)."
+  run_once: true
 
-PLAY RECAP **************************************************************************************
-localhost                  : ok=35   changed=1    unreachable=0    failed=1    skipped=4    rescued=0    ignored=0
+# 6) Preparar directorio temporal para seed cloud-init
+- name: Preparar seed cloud-init local
+  ansible.builtin.file:
+    path: "/tmp/seed-{{ seed_vm_name }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  run_once: true
 
-openbsd$
+# 7) SSH key pública
+- name: Resolver ruta de la llave pública (expandir ~)
+  ansible.builtin.set_fact:
+    _pubkey_path: "{{ (ssh_pubkey_path | default('~/.ssh/id_rsa.pub')) | expanduser }}"
+  run_once: true
+
+- name: Derivar ruta de la llave privada (si _pubkey_path termina en .pub)
+  ansible.builtin.set_fact:
+    _privkey_path: "{{ _pubkey_path[:-4] if _pubkey_path.endswith('.pub') else '' }}"
+  run_once: true
+
+- name: Verificar existencia de la llave pública
+  ansible.builtin.stat:
+    path: "{{ _pubkey_path }}"
+  register: _pubkey_stat
+  run_once: true
+
+- name: Asegurar que la llave pública existe
+  ansible.builtin.assert:
+    that:
+      - _pubkey_stat.stat.exists
+    fail_msg: "No se encontró la llave pública en {{ _pubkey_path }}. Ajusta ssh_pubkey_path o crea la llave."
+  run_once: true
+
+- name: Cargar llave pública (contenido)
+  ansible.builtin.slurp:
+    src: "{{ _pubkey_path }}"
+  register: _pubkey_slurp
+  run_once: true
+
+- name: Guardar contenido de la llave pública en variable
+  ansible.builtin.set_fact:
+    ssh_pubkey_content: "{{ _pubkey_slurp.content | b64decode | trim }}"
+  run_once: true
+
+# 8) Calcular prefix desde netmask
+- name: Descomponer netmask en octetos
+  ansible.builtin.set_fact:
+    _mask_octets: "{{ guest_netmask.split('.') | map('int') | list }}"
+  run_once: true
+
+- name: Mapa de bits por octeto
+  ansible.builtin.set_fact:
+    _bits_map:
+      "0": 0
+      "128": 1
+      "192": 2
+      "224": 3
+      "240": 4
+      "248": 5
+      "252": 6
+      "254": 7
+      "255": 8
+  run_once: true
+
+- name: Calcular prefix a partir del netmask
+  ansible.builtin.set_fact:
+    prefix: >-
+      {{
+        _bits_map[str(_mask_octets[0])] +
+        _bits_map[str(_mask_octets[1])] +
+        _bits_map[str(_mask_octets[2])] +
+        _bits_map[str(_mask_octets[3])]
+      }}
+  run_once: true
+
+- name: Validar prefix calculado
+  ansible.builtin.assert:
+    that:
+      - prefix is defined
+      - prefix > 0
+      - prefix <= 32
+    success_msg: "All assertions passed"
+  run_once: true
+
+########################
+# 9) Render de cloud-init
+########################
+
+- name: user-data
+  ansible.builtin.template:
+    src: "user-data.j2"
+    dest: "/tmp/seed-{{ seed_vm_name }}/user-data"
+    mode: "0644"
+  delegate_to: localhost
+  run_once: true
+
+- name: meta-data
+  ansible.builtin.template:
+    src: "meta-data.j2"
+    dest: "/tmp/seed-{{ seed_vm_name }}/meta-data"
+    mode: "0644"
+  delegate_to: localhost
+  run_once: true
+
+########################
+# 10) Crear seed ISO
+########################
+
+- name: Crear seed ISO (NoCloud) con mkisofs
+  ansible.builtin.command: >
+    mkisofs -output /tmp/seed-{{ seed_vm_name }}.iso
+    -volid cidata
+    -joliet -rock
+    user-data meta-data
+  args:
+    chdir: "/tmp/seed-{{ seed_vm_name }}"
+  delegate_to: localhost
+  run_once: true
+  register: _mkiso
+  changed_when: true
+
+- name: Calcular ruta remota para seed ISO
+  ansible.builtin.set_fact:
+    _seed_iso_path: "/tmp/seed-{{ seed_vm_name }}.iso"
+    _remote_seed_path: "{{ _iso_dir ~ '/seed-' ~ seed_vm_name ~ '.iso' }}"
+  run_once: true
+
+- name: DEBUG rutas de upload
+  ansible.builtin.debug:
+    msg:
+      datacenter: "{{ _dc }}"
+      datastore: "{{ _ds }}"
+      local_src: "{{ _seed_iso_path }}"
+      remote_path: "{{ _remote_seed_path }}"
+  run_once: true
+
+- name: Verificar que el seed ISO local existe
+  ansible.builtin.stat:
+    path: "{{ _seed_iso_path }}"
+  register: _seed_iso_stat
+  delegate_to: localhost
+  run_once: true
+
+- name: Asegurar que el seed ISO local existe
+  ansible.builtin.assert:
+    that:
+      - _seed_iso_stat.stat.exists
+    success_msg: "Seed ISO local generado correctamente."
+  run_once: true
+
+##################################################
+# 11) Subir seed ISO al datastore
+##################################################
+
+- name: Subir seed ISO al datastore
+  community.vmware.vsphere_copy:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+    datacenter: "{{ _dc }}"
+    datastore: "{{ _ds }}"
+    src: "{{ _seed_iso_path }}"
+    path: "{{ _remote_seed_path }}"
+  delegate_to: localhost
+  run_once: true
+  register: _copy_result
+  until: _copy_result is succeeded
+  retries: 3
+  delay: 5
+  failed_when: _copy_result is failed
