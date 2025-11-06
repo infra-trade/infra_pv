@@ -10,8 +10,6 @@
     vmware_venv: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
     venv_python: "{{ vmware_venv + '/bin/python3' }}"
 
-  # OJO: NO fijamos ansible_python_interpreter aquí aún
-
   pre_tasks:
     - name: Crear venv para módulos VMware (si no existe)
       delegate_to: localhost
@@ -36,7 +34,6 @@
         name: pyvmomi
         virtualenv: "{{ vmware_venv }}"
 
-    # Ahora que el venv existe y tiene pyvmomi, cambiamos el intérprete
     - name: Usar el Python del venv para el resto del play
       set_fact:
         ansible_python_interpreter: "{{ venv_python }}"

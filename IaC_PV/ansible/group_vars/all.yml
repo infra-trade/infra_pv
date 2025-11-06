@@ -1,13 +1,13 @@
 # === vCenter ===
 vcenter_hostname: "192.168.5.151"
-vcenter_datacenter: "POPULAR VALORES" 
+vcenter_datacenter: "POPULAR VALORES"
 vcenter_cluster: "PV-CLUSTER"
 vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
 vcenter_network: "VLAN-5"
 vcenter_validate_certs: false
 vcenter_username: "{{ vault_vcenter_username }}"
 vcenter_password: "{{ vault_vcenter_password }}"
-vm_folder: "PV_IaC"
+vm_folder: "Infra"
 
 # === Template / nombres ===
 seed_vm_name: "ubuntu-seed-24-04"
@@ -18,24 +18,28 @@ vm_cpu: 3
 vm_ram_mb: 32768
 vm_disk_gb: 120
 guest_domain: "localdomain"
-guest_gateway: "192.168.5.252"
+guest_gateway: "192.168.5.1"
 guest_netmask: "255.255.255.0"
-guest_dns_servers: ["192.168.10.2", "192.168.10.50"]
-net_interface: "ens160"           # interface típica en VMware
+guest_dns_servers: ["192.168.5.1", "8.8.8.8"]
+net_interface: "ens160"     # cambia si tu interfaz difiere
 
 # === Ubuntu ISO ===
-ubuntu_iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso"
-ubuntu_iso_local: ""              # si usas ISO local, pon ruta y deja iso_url vacío
-datastore_iso_dir: "iso"          # carpeta en datastore para ISOs
+# Si YA tienes el ISO en el datastore, usa existing_datastore_iso y deja url/local vacíos
+ubuntu_iso_url: ""          # ej: "https://releases.ubuntu.com/24.04/ubuntu-24.04.3-live-server-amd64.iso"
+ubuntu_iso_local: ""        # ej: "/home/ansible/isos/ubuntu-24.04.3-live-server-amd64.iso"
+datastore_iso_dir: "ISOS"   # carpeta en el datastore
 
-# === SSH (SOLO keys) ===
-ssh_pubkey_path: "~/.ssh/id_rsa.pub"     # TU llave pública
-disable_password_ssh: true               # no permitir auth por contraseña
+# 👉 ISO EXISTENTE en el datastore (TU RUTA EXACTA en vSphere)
+existing_datastore_iso: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.3-live-server-amd64.iso"
+
+# === SSH (solo keys) ===
+ssh_pubkey_path: "~/.ssh/id_rsa.pub"
+disable_password_ssh: true
 
 # === Usuario Linux inicial ===
 linux_user: "ubuntu"
 
-# === IPs/Hosts a provisionar desde el template ===
+# === VMs finales ===
 infra_hosts:
   - name: "infra-master"
     ip: "192.168.5.85"

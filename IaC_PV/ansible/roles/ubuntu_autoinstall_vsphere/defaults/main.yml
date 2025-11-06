@@ -1,0 +1,7 @@
+---
+ubuntu_iso_url: ""
+ubuntu_iso_local: ""
+datastore_iso_dir: "ISOS"
+
+# Si ya existe el ISO en el datastore, pon aquí la ruta "[DATASTORE] carpeta/archivo.iso"
+existing_datastore_iso: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.3-live-server-amd64.iso"
