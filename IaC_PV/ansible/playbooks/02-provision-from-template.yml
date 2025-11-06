@@ -1,0 +1,49 @@
+---
+- name: Clonar VMs desde template con IP estática
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../vault.yml
+
+  tasks:
+    - name: Clonar cada VM desde template
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        cluster: "{{ vcenter_cluster }}"
+        folder: "{{ vm_folder | default(omit) }}"
+        name: "{{ item.name }}"
+        template: "{{ template_name }}"
+        state: poweredon
+        hardware:
+          memory_mb: "{{ vm_ram_mb }}"
+          num_cpus: "{{ vm_cpu }}"
+          scsi: paravirtual
+          boot_firmware: efi
+        networks:
+          - name: "{{ vcenter_network }}"
+            type: static
+            ip: "{{ item.ip }}"
+            netmask: "{{ guest_netmask }}"
+            gateway: "{{ guest_gateway }}"
+            domain: "{{ guest_domain }}"
+            dns_servers: "{{ guest_dns_servers }}"
+        disk:
+          - size_gb: "{{ vm_disk_gb }}"
+            type: thin
+            autoselect_datastore: false
+            datastore: "{{ vcenter_datastore }}"
+        customization:
+          hostname: "{{ item.name }}"
+          domain: "{{ guest_domain }}"
+          dns_servers: "{{ guest_dns_servers }}"
+          linux_options:
+            host_name: "{{ item.name }}"
+            domain: "{{ guest_domain }}"
+        wait_for_ip_address: true
+        state_change_timeout: 1200
+      loop: "{{ infra_hosts }}"

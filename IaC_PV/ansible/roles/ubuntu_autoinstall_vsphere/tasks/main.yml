@@ -1,0 +1,186 @@
+---
+- name: Dependencias en controlador
+  delegate_to: localhost
+  become: false
+  block:
+    - name: Instalar herramientas ISO/pyvmomi
+      package:
+        name:
+          - genisoimage
+          - xorriso
+          - python3-pip
+        state: present
+      ignore_errors: true
+
+    - name: Instalar pyvmomi (módulos VMware)
+      pip:
+        name: pyvmomi
+
+- name: Nombre y path de ISO Ubuntu
+  set_fact:
+    ubuntu_iso_filename: "{{ (ubuntu_iso_url | basename) if ubuntu_iso_url|length>0 else (ubuntu_iso_local | basename) }}"
+    ubuntu_iso_local_path: >-
+      {{ (ubuntu_iso_local if ubuntu_iso_local|length>0 else (lookup('env','HOME') + '/.cache/ansible/' + (ubuntu_iso_url | basename))) }}
+
+- name: Descargar ISO Ubuntu si hay URL
+  delegate_to: localhost
+  when: ubuntu_iso_url|length > 0
+  get_url:
+    url: "{{ ubuntu_iso_url }}"
+    dest: "{{ ubuntu_iso_local_path }}"
+    mode: "0644"
+    force: no
+
+- name: Subir ISO Ubuntu al datastore
+  community.vmware.vsphere_copy:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs }}"
+    src: "{{ ubuntu_iso_local_path }}"
+    datacenter: "{{ vcenter_datacenter }}"
+    datastore: "{{ vcenter_datastore }}"
+    path: "{{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
+
+- name: Preparar seed cloud-init local
+  delegate_to: localhost
+  file:
+    path: "/tmp/seed-{{ seed_vm_name }}"
+    state: directory
+    mode: "0755"
+
+- name: Cargar llave pública
+  delegate_to: localhost
+  set_fact:
+    ssh_pubkey_content: "{{ lookup('file', ssh_pubkey_path | expanduser) }}"
+
+- name: Calcular máscara en bits
+  set_fact:
+    mask_bits: "{{ (guest_netmask | ipaddr('prefix')) }}"
+
+- name: Renderizar user-data/meta-data
+  delegate_to: localhost
+  block:
+    - name: user-data
+      template:
+        src: "templates/user-data.j2"
+        dest: "/tmp/seed-{{ seed_vm_name }}/user-data"
+        mode: "0644"
+      vars:
+        hostname: "{{ seed_vm_name }}"
+        host_ip: "192.168.5.250"   # IP temporal para seed (no usada luego)
+        mask_bits: "{{ mask_bits }}"
+        ssh_key: "{{ ssh_pubkey_content }}"
+
+    - name: meta-data
+      template:
+        src: "templates/meta-data.j2"
+        dest: "/tmp/seed-{{ seed_vm_name }}/meta-data"
+        mode: "0644"
+      vars:
+        hostname: "{{ seed_vm_name }}"
+
+- name: Crear seed ISO (NoCloud)
+  delegate_to: localhost
+  command:
+    cmd: >
+      genisoimage -output /tmp/seed-{{ seed_vm_name }}.iso
+      -volid cidata -joliet -rock
+      /tmp/seed-{{ seed_vm_name }}/user-data
+      /tmp/seed-{{ seed_vm_name }}/meta-data
+    creates: "/tmp/seed-{{ seed_vm_name }}.iso"
+
+- name: Subir seed ISO al datastore
+  community.vmware.vsphere_copy:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs }}"
+    src: "/tmp/seed-{{ seed_vm_name }}.iso"
+    datacenter: "{{ vcenter_datacenter }}"
+    datastore: "{{ vcenter_datastore }}"
+    path: "{{ datastore_iso_dir }}/seed-{{ seed_vm_name }}.iso"
+
+- name: Crear VM seed y montar ISOs
+  community.vmware.vmware_guest:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs }}"
+    datacenter: "{{ vcenter_datacenter }}"
+    cluster: "{{ vcenter_cluster }}"
+    folder: "{{ vm_folder | default(omit) }}"
+    name: "{{ seed_vm_name }}"
+    state: poweredon
+    guest_id: "ubuntu64Guest"
+    hardware:
+      memory_mb: "{{ vm_ram_mb }}"
+      num_cpus: "{{ vm_cpu }}"
+      scsi: paravirtual
+      boot_firmware: efi
+      boot_order:
+        - cdrom
+        - disk
+        - ethernet
+    networks:
+      - name: "{{ vcenter_network }}"
+    disk:
+      - size_gb: "{{ vm_disk_gb }}"
+        type: thin
+        autoselect_datastore: false
+        datastore: "{{ vcenter_datastore }}"
+    cdrom:
+      - type: iso
+        iso_path: "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
+        controller_number: 0
+        unit_number: 0
+      - type: iso
+        iso_path: "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/seed-{{ seed_vm_name }}.iso"
+        controller_number: 0
+        unit_number: 1
+    wait_for_ip_address: no
+
+# La instalación tarda varios minutos; esperamos a que el sistema quede accesible por SSH.
+- name: Esperar SSH activo (hostname seed, IP por DHCP o temporal)
+  wait_for:
+    host: "{{ vcenter_hostname }}"   # NO sabemos la IP del seed aún, solo esperamos a que finalice instalación
+    port: 443
+    timeout: 1
+  delegate_to: localhost
+  ignore_errors: true
+
+# En la práctica, mejor esperar por guest tools o por la MAC/IP descubierta.
+# Simplificamos: esperamos un tiempo amplio y luego apagamos por ACPI desde vSphere.
+- name: Espera razonable a que finalice autoinstall
+  pause:
+    minutes: 15
+
+# Desmontar ISOs y apagar para "limpiar" antes de templar
+- name: Desmontar CDROMs
+  community.vmware.vmware_guest:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs }}"
+    datacenter: "{{ vcenter_datacenter }}"
+    name: "{{ seed_vm_name }}"
+    cdrom:
+      - type: none
+        state: present
+        controller_number: 0
+        unit_number: 0
+      - type: none
+        state: present
+        controller_number: 0
+        unit_number: 1
+
+- name: Apagar VM seed
+  community.vmware.vmware_guest:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs }}"
+    datacenter: "{{ vcenter_datacenter }}"
+    name: "{{ seed_vm_name }}"
+    state: poweredoff
+    state_change_timeout: 1200

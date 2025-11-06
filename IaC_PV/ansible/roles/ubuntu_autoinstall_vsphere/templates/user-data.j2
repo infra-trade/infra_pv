@@ -1,0 +1,35 @@
+#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US
+  keyboard: { layout: us }
+  identity:
+    hostname: {{ hostname }}
+    username: {{ linux_user }}
+    # NO password: solo keys. Si Ubuntu exige campo, se deja vacío y se deshabilita auth por password.
+    password: ""
+  ssh:
+    install-server: true
+    allow-pw: {{ 'false' if disable_password_ssh else 'true' }}
+    authorized-keys:
+      - "{{ ssh_key }}"
+  storage:
+    layout: { name: lvm }
+    swap: { size: 0 }
+  network:
+    network:
+      version: 2
+      ethernets:
+        {{ net_interface }}:
+          dhcp4: true   # la seed puede usar DHCP; las VMs finales tendrán IP estática vía customización
+  user-data:
+    disable_root: true
+    package_update: true
+    package_upgrade: true
+    packages: [open-vm-tools, qemu-guest-agent]
+    runcmd:
+      - [ systemctl, enable, --now, qemu-guest-agent ]
+      - [ systemctl, enable, --now, ssh ]
+  late-commands:
+    - curtin in-target --target=/target -- systemctl enable ssh
+    - curtin in-target --target=/target -- systemctl start ssh
