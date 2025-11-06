@@ -35,10 +35,10 @@
     #################################################################
     # 1) Resolver credenciales / endpoint vCenter
     #    Precedencia:
-    #      ENV > vault_* > valores ya definidos (group_vars/all.yml)
+    #      -e / ENV > vault_* > group_vars/all.yml
     #################################################################
 
-    - name: Resolver endpoint vCenter (hostname) desde vars/env/vault
+    - name: Resolver endpoint/credenciales desde entorno y vault
       ansible.builtin.set_fact:
         _vc_hostname_env: "{{ lookup('env', 'VCENTER_HOSTNAME') | default('', true) }}"
         _vc_username_env: "{{ lookup('env', 'VCENTER_USERNAME') | default('', true) }}"
@@ -51,22 +51,33 @@
       ansible.builtin.set_fact:
         vcenter_hostname: >-
           {{
-            _vc_hostname_env
-            or _vc_hostname_vault
-            or vcenter_hostname | default('', true)
+            (vcenter_hostname is defined and vcenter_hostname | length > 0)
+            | ternary(vcenter_hostname,
+                      (_vc_hostname_env
+                       or _vc_hostname_vault
+                       or ''))
           }}
         vcenter_username: >-
           {{
-            _vc_username_env
-            or _vc_username_vault
-            or vcenter_username | default('', true)
+            (vcenter_username is defined and vcenter_username | length > 0)
+            | ternary(vcenter_username,
+                      (_vc_username_env
+                       or _vc_username_vault
+                       or ''))
           }}
         vcenter_password: >-
           {{
-            _vc_password_env
-            or _vc_password_vault
-            or vcenter_password | default('', true)
+            (_vc_password_env
+             or _vc_password_vault
+             or vcenter_password | default('', true))
           }}
+
+    - name: Mostrar parámetros efectivos de vCenter (debug)
+      ansible.builtin.debug:
+        msg:
+          hostname: "{{ vcenter_hostname | default('') }}"
+          username: "{{ vcenter_username | default('') }}"
+          password_from_vault: "{{ 'YES' if (vcenter_password | default('') | length > 0) else 'NO' }}"
 
     - name: Validar credenciales y endpoint de vCenter
       ansible.builtin.assert:

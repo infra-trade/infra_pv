@@ -1,114 +1,59 @@
----
-##############################
-# Conexión a vCenter
-##############################
+# =========================
+# Parámetros de vCenter
+# =========================
 
-# vCenter endpoint
+# Endpoint y credenciales (usuario aquí; contraseña solo en vault.yml)
 vcenter_hostname: "192.168.5.150"
-vcenter_port: 443
-vcenter_validate_certs: false
+vcenter_username: "ansible_svc@vsphere.local"
 
-# Credenciales DESDE VAULT (no pongas la clave aquí)
-vcenter_username: "{{ vault_vcenter_username }}"
-vcenter_password: "{{ vault_vcenter_password }}"
-
-##############################
-# Inventario vSphere
-##############################
-
-# Nombres EXACTOS como aparecen en vCenter
+# Nombre EXACTO del Datacenter en vCenter
 vcenter_datacenter: "POPULAR_VALORES"
-vcenter_cluster: "PV-CLUSTER"
+
+# Nombre EXACTO del datastore donde está/irá la ISO
 vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
+
+# Cluster donde trabajamos
+vcenter_cluster: "PV-CLUSTER"
+
+# Portgroup / Network para las VMs
 vcenter_network: "VLAN-5"
 
-# Carpeta dentro del datastore para ISOs (sin slash al inicio)
+# No validar certificados del vCenter (self-signed)
+vcenter_validate_certs: false
+
+# Carpeta dentro del datastore para ISOs
+# (en tu caso existe PURESTORAGE_PV_X20R4_VOL_1/ISOS)
 datastore_iso_dir: "ISOS"
 
-# Carpeta lógica de VMs dentro del datacenter (en “VMs and Templates”)
-vm_folder: "PV_IaC"
+# =========================
+# Parámetros de la VM seed
+# =========================
 
-##############################
-# Ubuntu ISO / autoinstall
-##############################
-
-# Usar descarga desde Internet (opción activa)
-ubuntu_iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04.1-live-server-amd64.iso"
-
-# Si ya tuvieses el ISO en el datastore, puedes usar (deja vacío si no):
-# Ejemplo: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.3-live-server-amd64.iso"
-ubuntu_iso_existing: ""
-
-# Si quisieras subir un ISO desde el host Ansible, ruta local:
-ubuntu_iso_local: ""
-
-# Solo usar el seed ISO (sin ISO de instalación). Normalmente false.
-use_seed_only: false
-
-##############################
-# VM seed (template base Ubuntu)
-##############################
-
+# Nombre de la VM/template seed que vamos a crear
 seed_vm_name: "ubuntu-seed-24-04"
-seed_vm_folder: "{{ vm_folder }}"
 
-# HW del template
-seed_vm_cpu: 3
-seed_vm_memory_mb: 32768        # 32 GB
-seed_vm_disk_gb: 120
-
-# Red temporal para la instalación/autoinstall
-guest_ip: "192.168.5.80"
-guest_netmask: "255.255.255.0"
-guest_gateway: "192.168.5.1"
-guest_dns: "192.168.5.1"
-guest_domain: "popvalores.com"
-
-##############################
-# Usuario Linux dentro del template
-##############################
-
+# Usuario Linux que se creará dentro de la seed
 linux_user: "ansible"
-linux_user_gecos: "Ansible Admin"
-linux_user_shell: "/bin/bash"
+linux_user_fullname: "Ansible Admin"
 
-# Llave pública de tu host Ansible para acceso por SSH
+# Ruta a tu llave pública desde el host Ansible
 ssh_pubkey_path: "/home/ansible/.ssh/id_rsa.pub"
 
-# Endurecimiento SSH
-allow_ssh_password_auth: false
-allow_root_ssh: false
+# Config red de la seed (puedes ajustarlo luego si quieres otra IP)
+guest_ip: "192.168.5.85"
+guest_netmask: "255.255.255.0"
+guest_gateway: "192.168.5.1"
+guest_dns:
+  - "8.8.8.8"
+  - "1.1.1.1"
 
-##############################
-# cloud-init / regionalización
-##############################
+# =========================
+# ISO de Ubuntu
+# =========================
 
-cloud_init_timezone: "America/Mexico_City"
-cloud_init_locale: "es_MX.UTF-8"
+# URL oficial para descargar la ISO si no existe local
+ubuntu_iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04.1-live-server-amd64.iso"
 
-##############################
-# VMs finales (clones del template)
-##############################
-
-infra_vms:
-  - name: "infra-master"
-    ip: "192.168.5.85"
-  - name: "infra-nodo1"
-    ip: "192.168.5.86"
-  - name: "infra-nodo2"
-    ip: "192.168.5.87"
-
-infra_vm_cpu: 3
-infra_vm_memory_mb: 32768       # 32 GB
-infra_vm_disk_gb: 120
-infra_vm_network: "{{ vcenter_network }}"
-infra_vm_folder: "{{ vm_folder }}"
-infra_vm_datastore: "{{ vcenter_datastore }}"
-infra_vm_cluster: "{{ vcenter_cluster }}"
-
-##############################
-# Otros toggles del rol
-##############################
-
-# No generar llave si falta (ya la tienes)
-ssh_generate_if_missing: false
+# Si tuvieras ya una ISO en el datastore y quisieras reutilizarla:
+# ubuntu_iso_existing_datastore_path: "[PURESTORAGE_PV_X20R4_VOL_1] ISOS/ubuntu-24.04.3-live-server-amd64.iso"
+# Deja comentado esto mientras usamos ubuntu_iso_url.
