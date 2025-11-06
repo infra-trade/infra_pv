@@ -34,18 +34,22 @@
         state: latest
         virtualenv: "{{ vmware_venv }}"
 
-    - name: Instalar pyvmomi en el venv
+    # 🔧 NUEVO: dependencias Python que requieren los módulos VMware
+    - name: Instalar dependencias de VMware en el venv
       delegate_to: localhost
       become: false
       ansible.builtin.pip:
-        name: pyvmomi
+        name:
+          - "pyvmomi>=8.0.2"
+          - "requests>=2.31.0"
+          - "urllib3>=1.26"     # si tu entorno tiene problemas con urllib3 v2, cambia a '<2'
         virtualenv: "{{ vmware_venv }}"
 
     - name: Usar el Python del venv para el resto del play
       set_fact:
         ansible_python_interpreter: "{{ venv_python }}"
 
-    # ====== NUEVO: Resolver credenciales/endpoint de vCenter ======
+    # ====== Resolver credenciales/endpoint de vCenter ======
     - name: Resolver endpoint vCenter (hostname) desde vars/env/vault
       set_fact:
         vcenter_hostname: >-
@@ -87,9 +91,8 @@
           Faltan parámetros de vCenter.
           hostname='{{ vcenter_hostname | default('') }}'
           username='{{ vcenter_username | default('') }}'
-          Asegúrate de definirlos en group_vars/all.yml o en vault.yml
-          (o exporta VCENTER_HOSTNAME / VCENTER_USERNAME / VCENTER_PASSWORD en el entorno).
-    # ====== FIN NUEVO ======
+          Define en group_vars/all.yml o en vault.yml
+          (o exporta VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD).
 
   roles:
     - role: ubuntu_autoinstall_vsphere
