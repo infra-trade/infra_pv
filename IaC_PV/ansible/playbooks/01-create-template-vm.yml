@@ -4,40 +4,52 @@
   connection: local
   gather_facts: false
 
+  ####################################################################
+  # PRE-TASKS: Resolver credenciales y scope de vCenter
+  # Fuente (en este orden):
+  #   1) Variables de entorno VCENTER_*
+  #   2) vars/env/vault.yml        (cifrado, usado con --ask-vault-pass)
+  #   3) group_vars/all.yml        (valores por defecto)
+  #
+  # Debes tener (como ya usa el play 00):
+  #   vars/env/vault.yml:
+  #     vcenter_hostname: 192.168.5.150
+  #     vcenter_username: ansible_svc@vsphere.local
+  #     vcenter_password: "TU_PASSWORD"
+  #
+  #   group_vars/all.yml:
+  #     vcenter_datacenter: POPULAR_VALORES
+  #     vcenter_datastore: PURESTORAGE_PV_X20R4_VOL_1
+  #     vcenter_cluster: PV-CLUSTER
+  #     vcenter_network: VLAN-5
+  #     datastore_iso_dir: ISOS
+  ####################################################################
+
   pre_tasks:
-    ####################################################################
-    # 1) Cargar credenciales desde vars/env/vault.yml (opcional)
-    #    Debe contener (como en el play 00):
-    #      vcenter_hostname: ...
-    #      vcenter_username: ...
-    #      vcenter_password: ...
-    ####################################################################
+
     - name: Cargar credenciales de vCenter desde vars/env/vault.yml (si existe)
       ansible.builtin.include_vars:
         file: vars/env/vault.yml
       ignore_errors: true
       failed_when: false
 
-    ####################################################################
-    # 2) Resolver endpoint/credenciales desde:
-    #    - Variables de entorno VCENTER_*
-    #    - group_vars/all.yml (vcenter_*)
-    #    - vars/env/vault.yml (vcenter_*)
-    #
-    #    NOTA: usamos exactamente la misma lógica que en 00-build-template.yml
-    ####################################################################
-    - name: Resolver endpoint/credenciales desde entorno, group_vars y vault
+    - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
       ansible.builtin.set_fact:
+        # Hostname
         vcenter_hostname: >-
           {{
             (lookup('env', 'VCENTER_HOSTNAME') | default('', true))
             or (vcenter_hostname | default('', true))
           }}
+
+        # Usuario
         vcenter_username: >-
           {{
             (lookup('env', 'VCENTER_USERNAME') | default('', true))
             or (vcenter_username | default('', true))
           }}
+
+        # Password
         vcenter_password: >-
           {{
             (lookup('env', 'VCENTER_PASSWORD') | default('', true))
@@ -77,8 +89,10 @@
           - (vcenter_password | length) > 0
         fail_msg: >-
           Faltan parámetros de vCenter. hostname='{{ vcenter_hostname }}' username='{{ vcenter_username }}'.
-          Define en group_vars/all.yml (vcenter_*) o en vars/env/vault.yml (vcenter_*)
-          o exporta VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD.
+          Define en:
+            - group_vars/all.yml (vcenter_*)
+            - o vars/env/vault.yml (vcenter_*)
+            - o variables de entorno VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD.
         success_msg: "Parámetros de vCenter OK."
 
     - name: Validar datacenter/datastore/cluster/network definidos
@@ -100,9 +114,10 @@
           datastore: "{{ vcenter_datastore }}"
           cluster: "{{ vcenter_cluster }}"
           network: "{{ vcenter_network }}"
+          iso_dir: "{{ datastore_iso_dir }}"
 
   ####################################################################
-  # 3) Variables de la VM base
+  # Variables de la VM base
   ####################################################################
   vars:
     vm_name: "ubuntu-24-04-base"
@@ -129,7 +144,7 @@
     seed_iso_name: "seed-ubuntu-seed-24-04.iso"
 
   ####################################################################
-  # 4) Crear la VM base
+  # CREACIÓN DE LA VM
   ####################################################################
   tasks:
 
@@ -186,6 +201,6 @@
       ansible.builtin.debug:
         msg:
           - "La VM '{{ vm_name }}' fue creada/actualizada en '{{ vcenter_datacenter }} / {{ vcenter_cluster }}'."
-          - "Abre la consola en vCenter y verifica que arranca desde el ISO de Ubuntu + seed."
-          - "Deja que termine el autoinstall y la configuración cloud-init."
-          - "Cuando termine, APAGA la VM y márcala como Template o usa el siguiente playbook para convertirla."
+          - "Debe arrancar con el ISO de Ubuntu y el seed ISO ya montados."
+          - "Deja que complete el autoinstall y cloud-init."
+          - "Luego puedes apagarla y marcarla como Template."
