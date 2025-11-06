@@ -67,6 +67,7 @@
         msg:
           keys: "{{ vc_info.keys() | list }}"
 
-    - name: Imprimir 'about' si existe (compatibilidad)
+    - name: Mostrar about_info (versión vCenter/ESXi) si existe
       debug:
-        msg: "{{ vc_info.about | default(vc_info.instance.about | default({})) }}"
+        var: vc_info.about_info
+      when: vc_info.about_info is defined

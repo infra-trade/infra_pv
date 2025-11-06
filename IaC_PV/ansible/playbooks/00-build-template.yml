@@ -34,7 +34,6 @@
         state: latest
         virtualenv: "{{ vmware_venv }}"
 
-    # 🔧 NUEVO: dependencias Python que requieren los módulos VMware
     - name: Instalar dependencias de VMware en el venv
       delegate_to: localhost
       become: false
@@ -42,20 +41,21 @@
         name:
           - "pyvmomi>=8.0.2"
           - "requests>=2.31.0"
-          - "urllib3>=1.26"     # si tu entorno tiene problemas con urllib3 v2, cambia a '<2'
+          - "urllib3>=1.26"
         virtualenv: "{{ vmware_venv }}"
 
     - name: Usar el Python del venv para el resto del play
       set_fact:
         ansible_python_interpreter: "{{ venv_python }}"
 
-    # ====== Resolver credenciales/endpoint de vCenter ======
+    # Resolver vCenter desde vars/env/vault (incluye hostname opcional en vault)
     - name: Resolver endpoint vCenter (hostname) desde vars/env/vault
       set_fact:
         vcenter_hostname: >-
           {{
             (vcenter_hostname | default('', true))
             | default(lookup('env','VCENTER_HOSTNAME'), true)
+            | default(vault_vcenter_hostname | default('', true), true)
             | default('', true)
           }}
 

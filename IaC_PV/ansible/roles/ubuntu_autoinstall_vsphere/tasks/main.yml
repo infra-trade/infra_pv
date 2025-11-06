@@ -5,7 +5,7 @@
   delegate_to: localhost
   become: false
 
-# 1) Probar conexión a vCenter (sanity check) — ROBUSTO
+# 1) Probar conexión a vCenter (sanity check) — robusto
 - name: Probar conexión a vCenter (sanity check)
   community.vmware.vmware_about_info:
     hostname: "{{ vcenter_hostname }}"
@@ -22,7 +22,23 @@
     success_msg: "Conexión a vCenter OK."
     fail_msg: "Conexión a vCenter falló (revisa usuario/clave/dominio o permisos)."
 
-# 2) Instalar dependencias en OpenBSD
+# 1.1) Verificar datacenter/datastore antes de tocar ficheros/ISOs
+- name: DEBUG vCenter scope (datacenter/datastore)
+  debug:
+    msg:
+      datacenter: "{{ vcenter_datacenter }}"
+      datastore: "{{ vcenter_datastore }}"
+
+- name: Validar datacenter y datastore no vacíos
+  assert:
+    that:
+      - (vcenter_datacenter | length) > 0
+      - (vcenter_datastore  | length) > 0
+    fail_msg: >
+      Faltan 'vcenter_datacenter' o 'vcenter_datastore'.
+      Verifica iac/ansible/group_vars/all.yml (o -e / vault) antes de continuar.
+
+# 2) Instalar dependencias del SO según plataforma
 - name: Instalar dependencias en OpenBSD
   package:
     name:
@@ -33,7 +49,6 @@
   become: true
   when: ansible_facts['os_family'] == 'OpenBSD'
 
-# 3) Instalar dependencias en Debian/Ubuntu
 - name: Instalar dependencias en Debian/Ubuntu
   apt:
     name:
@@ -45,7 +60,6 @@
   become: true
   when: ansible_facts['os_family'] == 'Debian'
 
-# 4) Instalar dependencias en RedHat/CentOS
 - name: Instalar dependencias en RedHat/CentOS
   yum:
     name:
@@ -56,7 +70,7 @@
   become: true
   when: ansible_facts['os_family'] == 'RedHat'
 
-# 5) Normalizar variables de ISO (strings)
+# 3) Normalizar variables y banderas (evita problemas de tipos)
 - name: Normalizar variables de ISO (strings)
   set_fact:
     _iso_url: "{{ ubuntu_iso_url | default('') | string }}"
@@ -76,7 +90,7 @@
       - use_url or use_local or use_existing
     fail_msg: "Define ubuntu_iso_url o ubuntu_iso_local, o bien existing_datastore_iso ('[DATASTORE] carpeta/archivo.iso')."
 
-# 6) Preparar nombre y path del ISO (cuando NO usamos existing)
+# 4) Preparar nombre y path del ISO (cuando NO usamos existing)
 - name: Inicializar variables de ISO calculadas
   set_fact:
     ubuntu_iso_filename: ""
@@ -106,7 +120,7 @@
       - ubuntu_iso_local_path | length > 0
   when: not use_existing
 
-# 7) Descargar ISO Ubuntu si hay URL
+# 5) Descargar ISO si viene por URL
 - name: Descargar ISO Ubuntu si hay URL
   delegate_to: localhost
   when:
@@ -118,7 +132,7 @@
     mode: "0644"
     force: no
 
-# 8) Preparar seed cloud-init local
+# 6) Preparar seed cloud-init local
 - name: Preparar seed cloud-init local
   delegate_to: localhost
   file:
@@ -193,7 +207,7 @@
     ssh_pubkey_content: "{{ _pubkey_data.content | b64decode | trim }}"
 # --- Fin gestión de llave pública ---
 
-# 9) Calcular máscara en bits SIN filtro 'ipaddr'
+# 7) Calcular máscara en bits SIN filtro 'ipaddr'
 - name: Descomponer netmask en octetos
   set_fact:
     _octs: "{{ guest_netmask | default('255.255.255.0') | string | split('.') | map('int') | list }}"
@@ -222,7 +236,7 @@
       - mask_bits <= 32
     fail_msg: "Netmask inválido: {{ guest_netmask }}"
 
-# 10) Renderizar user-data/meta-data
+# 8) Renderizar user-data/meta-data
 - name: Renderizar user-data/meta-data
   delegate_to: localhost
   block:
@@ -244,7 +258,7 @@
       vars:
         hostname: "{{ seed_vm_name }}"
 
-# 11) Crear seed ISO (NoCloud) con mkisofs
+# 9) Crear seed ISO (NoCloud) con mkisofs
 - name: Crear seed ISO (NoCloud) con mkisofs
   delegate_to: localhost
   command:
@@ -255,7 +269,7 @@
       /tmp/seed-{{ seed_vm_name }}/meta-data
     creates: "/tmp/seed-{{ seed_vm_name }}.iso"
 
-# 12) Asegurar carpeta en el datastore (por si no existe)
+# 10) Asegurar carpeta en el datastore (por si no existe)
 - name: Crear carpeta de destino en datastore ({{ _iso_dir }})
   community.vmware.vsphere_file:
     hostname: "{{ vcenter_hostname }}"
@@ -265,10 +279,14 @@
     port: 443
     datacenter: "{{ vcenter_datacenter }}"
     datastore: "{{ vcenter_datastore }}"
-    path: "/{{ _iso_dir }}"
+    datastore_name: "{{ vcenter_datastore }}"
+    path: "{{ _iso_dir }}"          # sin "/" inicial
     state: directory
+  register: _mk_dir
+  failed_when: false                 # si falla (404) seguimos; el upload puede crearla
+  changed_when: "_mk_dir is changed"
 
-# 13) Subir seed ISO al datastore
+# 11) Subir seed ISO al datastore
 - name: Subir seed ISO al datastore
   community.vmware.vsphere_copy:
     hostname: "{{ vcenter_hostname }}"
@@ -279,9 +297,10 @@
     src: "/tmp/seed-{{ seed_vm_name }}.iso"
     datacenter: "{{ vcenter_datacenter }}"
     datastore: "{{ vcenter_datastore }}"
+    datastore_name: "{{ vcenter_datastore }}"
     path: "{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
 
-# 14) Crear VM seed y montar ISOs
+# 12) Crear VM seed y montar ISOs
 - name: Crear VM seed y montar ISOs
   community.vmware.vmware_guest:
     hostname: "{{ vcenter_hostname }}"
@@ -329,12 +348,12 @@
         unit_number: 1
     wait_for_ip_address: no
 
-# 15) Espera simple a que finalice autoinstall (ajusta según tu entorno)
+# 13) Espera simple a que finalice autoinstall (ajusta según tu entorno)
 - name: Espera razonable a que finalice autoinstall
   pause:
     minutes: 15
 
-# 16) Desmontar CDROMs y apagar VM seed
+# 14) Desmontar CDROMs y apagar VM seed
 - name: Desmontar CDROMs
   community.vmware.vmware_guest:
     hostname: "{{ vcenter_hostname }}"
