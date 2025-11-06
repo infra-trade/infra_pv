@@ -282,12 +282,12 @@
     path: "{{ _iso_dir }}"          # sin "/" inicial
     state: directory
   register: _mk_dir
-  failed_when: false                 # si falla (404) seguimos; el upload puede crearla
+  failed_when: false
   changed_when: "_mk_dir is changed"
 
-# 11) Subir seed ISO al datastore (usar vsphere_file para evitar 404 intermitente)
+# 11) Subir seed ISO al datastore — usar vsphere_copy + reintentos
 - name: Subir seed ISO al datastore
-  community.vmware.vsphere_file:
+  community.vmware.vsphere_copy:
     hostname: "{{ vcenter_hostname }}"
     username: "{{ vcenter_username }}"
     password: "{{ vcenter_password }}"
@@ -295,10 +295,13 @@
     port: 443
     datacenter: "{{ vcenter_datacenter }}"
     datastore: "{{ vcenter_datastore }}"
-    path: "{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
     src: "/tmp/seed-{{ seed_vm_name }}.iso"
-    state: file
-    # overwrite: true   # si tu versión lo soporta; si no, se reemplaza igual al existir
+    path: "{{ _iso_dir }}/seed-{{ seed_vm_name }}.iso"
+    timeout: 120
+  register: _copy_result
+  retries: 3
+  delay: 3
+  until: _copy_result is succeeded
 
 # 12) Crear VM seed y montar ISOs
 - name: Crear VM seed y montar ISOs
