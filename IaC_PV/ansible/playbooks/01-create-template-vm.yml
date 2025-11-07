@@ -7,7 +7,7 @@
     # Nombre de la VM seed
     vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
 
-    # Carpeta dentro del datastore donde están los ISOS
+    # Carpeta dentro del datastore donde están las ISOS
     datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
     # Nombre del ISO de Ubuntu (debe existir en el datastore)
@@ -96,7 +96,7 @@
             or ((vault_vars | default({})).vault_vcenter_password | default('', true))
             or (vcenter_password | default('', true))
           }}
-        vcenter_port: "{{ (lookup('env','VCENTER_PORT') | default(443, true)) | int }}"
+        vcenter_port: 443
         vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
         vcenter_datastore: "{{ vcenter_datastore | default('') }}"
         vcenter_cluster: "{{ vcenter_cluster | default('') }}"
@@ -113,7 +113,7 @@
           datastore: "{{ vcenter_datastore }}"
           cluster: "{{ vcenter_cluster }}"
           network: "{{ vcenter_network }}"
-          port: "{{ vcenter_port | int }}"
+          port: "{{ vcenter_port }}"
           password_from_vault: >-
             {{
               'YES'
@@ -171,7 +171,7 @@
 
   tasks:
     ########################################################################
-    # 6) Crear VM base con installer ISO + seed ISO (llamada directa)
+    # 6) Crear VM base con installer ISO + seed ISO
     ########################################################################
     - name: Crear VM base para autoinstall
       community.vmware.vmware_guest:
@@ -179,15 +179,15 @@
         username: "{{ _vc_effective.username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs | bool }}"
-        port: "{{ _vc_effective.port | int }}"
+        port: 443
 
         datacenter: "{{ _vc_effective.datacenter }}"
+        folder: "/{{ _vc_effective.datacenter }}/vm"
         cluster: "{{ _vc_effective.cluster }}"
         datastore: "{{ _vc_effective.datastore }}"
-        folder: "/{{ _vc_effective.datacenter }}/vm"
 
         name: "{{ vm_name }}"
-        state: poweredoff
+        state: present
         is_template: false
         guest_id: ubuntu64Guest
 
@@ -209,7 +209,7 @@
             iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
 
         wait_for_ip_address: false
-        state_change_timeout: 600
         wait_for_customization: false
+        state_change_timeout: 600
 
       delegate_to: localhost
