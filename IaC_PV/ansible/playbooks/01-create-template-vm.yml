@@ -4,13 +4,9 @@
   gather_facts: false
 
   vars:
-    # Nombre de la VM seed
     vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
-
-    # Carpeta dentro del datastore donde están las ISOS
     datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
-    # Nombre del ISO de Ubuntu (debe existir en el datastore)
     ubuntu_iso_filename: >-
       {{
         (ubuntu_iso_url | default('') | basename)
@@ -18,25 +14,25 @@
         else 'ubuntu-24.04.1-live-server-amd64.iso'
       }}
 
-    # ISO seed generado por 00-build-template.yml
     seed_iso_filename: "seed-ubuntu-seed-24-04.iso"
 
   pre_tasks:
     ########################################################################
-    # 1) venv para VMware
+    # 1) venv para módulos VMware
     ########################################################################
     - name: Crear venv para módulos VMware (si no existe)
-      ansible.builtin.shell: |
-        set -e
-        VENV="$HOME/.ansible/venvs/vmware"
-        if [ ! -x "$VENV/bin/python" ]; then
-          mkdir -p "$HOME/.ansible/venvs"
-          python3 -m venv "$VENV"
-          "$VENV/bin/pip" install --upgrade pip
-          "$VENV/bin/pip" install pyvmomi requests
-        fi
-      args:
-        executable: /bin/sh
+      ansible.builtin.command:
+        cmd: >
+          /bin/sh -c '
+          set -e;
+          VENV="$HOME/.ansible/venvs/vmware";
+          if [ ! -x "$VENV/bin/python" ]; then
+            mkdir -p "$HOME/.ansible/venvs";
+            python3 -m venv "$VENV";
+            "$VENV/bin/pip" install --upgrade pip;
+            "$VENV/bin/pip" install pyvmomi requests;
+          fi
+          '
       changed_when: false
 
     - name: Usar el Python del venv para este play
@@ -96,12 +92,12 @@
             or ((vault_vars | default({})).vault_vcenter_password | default('', true))
             or (vcenter_password | default('', true))
           }}
-        vcenter_port: 443
+        vcenter_port: "{{ (vcenter_port | default(443)) | int }}"
         vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
         vcenter_datastore: "{{ vcenter_datastore | default('') }}"
         vcenter_cluster: "{{ vcenter_cluster | default('') }}"
         vcenter_network: "{{ vcenter_network | default('') }}"
-        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) | bool }}"
         datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
     - name: Consolidar parámetros efectivos de vCenter y scope
@@ -113,7 +109,7 @@
           datastore: "{{ vcenter_datastore }}"
           cluster: "{{ vcenter_cluster }}"
           network: "{{ vcenter_network }}"
-          port: "{{ vcenter_port }}"
+          port: "{{ vcenter_port | int }}"
           password_from_vault: >-
             {{
               'YES'
@@ -178,8 +174,8 @@
         hostname: "{{ _vc_effective.hostname }}"
         username: "{{ _vc_effective.username }}"
         password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs | bool }}"
-        port: 443
+        validate_certs: "{{ vcenter_validate_certs }}"
+        port: "{{ _vc_effective.port | int }}"
 
         datacenter: "{{ _vc_effective.datacenter }}"
         folder: "/{{ _vc_effective.datacenter }}/vm"
@@ -189,7 +185,7 @@
         name: "{{ vm_name }}"
         state: present
         is_template: false
-        guest_id: ubuntu64Guest
+        guest_id: "ubuntu64Guest"
 
         hardware:
           num_cpus: "{{ seed_vm_num_cpus_eff | int }}"
@@ -210,6 +206,9 @@
 
         wait_for_ip_address: false
         wait_for_customization: false
+        # Fuerza enteros en timeouts para esquivar bugs de None
+        wait_for_ip_address_timeout: 600
+        wait_for_customization_timeout: 600
         state_change_timeout: 600
 
       delegate_to: localhost
