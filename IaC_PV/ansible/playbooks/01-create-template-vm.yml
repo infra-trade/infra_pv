@@ -4,16 +4,16 @@
   gather_facts: false
 
   vars:
-    # Nombre de la VM seed (puede venir de group_vars/all.yml)
+    # Nombre de la VM seed (desde group_vars/all.yml o default)
     vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
 
-    # Carpeta (en vCenter) donde crear la VM (opcional)
+    # Carpeta lógica en vCenter (opcional)
     vm_folder: ""
 
-    # Carpeta dentro del datastore donde están los ISOS
+    # Carpeta dentro del datastore donde están los ISOs
     datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
-    # Nombre del ISO de Ubuntu (coincide con el que subimos en 00-build-template.yml)
+    # Nombre del ISO de Ubuntu (el que subimos o definimos en all.yml)
     ubuntu_iso_filename: >-
       {{
         (ubuntu_iso_url | default('') | basename)
@@ -181,7 +181,7 @@
 
         name: "{{ vm_name }}"
         state: poweredoff
-        template: false
+        is_template: false
 
         datacenter: "{{ _vc_effective.datacenter }}"
         cluster: "{{ _vc_effective.cluster }}"
