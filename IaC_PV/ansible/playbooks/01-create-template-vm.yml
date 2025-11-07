@@ -79,27 +79,23 @@
       ansible.builtin.set_fact:
         vcenter_hostname: >-
           {{
-            (lookup('env', 'VCENTER_HOSTNAME')
-             or vcenter_hostname
-             or '')
+            lookup('env', 'VCENTER_HOSTNAME')
+            | default(vcenter_hostname | default(''), true)
           }}
         vcenter_username: >-
           {{
-            (lookup('env', 'VCENTER_USERNAME')
-             or vcenter_username
-             or '')
+            lookup('env', 'VCENTER_USERNAME')
+            | default(vcenter_username | default(''), true)
           }}
         vcenter_password: >-
           {{
-            (lookup('env', 'VCENTER_PASSWORD')
-             or vcenter_password
-             or '')
+            lookup('env', 'VCENTER_PASSWORD')
+            | default(vcenter_password | default(''), true)
           }}
+        # 🔧 FIX: no referenciar vcenter_port previo; usar env o 443
         vcenter_port: >-
           {{
-            (lookup('env', 'VCENTER_PORT')
-             or vcenter_port
-             or 443)
+            (lookup('env', 'VCENTER_PORT') | default(443, true)) | int
           }}
         vcenter_validate_certs: >-
           {{
@@ -215,7 +211,7 @@
         success_msg: "Scope de vCenter (DC/DS/Cluster/Network) OK."
 
     ########################################################################
-    # 8) Definir nombres de ISOs (ARREGLADO)
+    # 8) Definir nombres de ISOs (sin bug de '>')
     ########################################################################
 
     - name: Definir nombres de ISOs
@@ -239,7 +235,7 @@
           seed_iso_filename: "{{ seed_iso_filename }}"
 
     ########################################################################
-    # 9) Crear VM base con vmware_guest (llamada limpia, sin argsplat)
+    # 9) Crear VM base con vmware_guest (llamada limpia)
     ########################################################################
 
     - name: Crear VM base para autoinstall
