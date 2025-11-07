@@ -3,31 +3,27 @@
   hosts: localhost
   gather_facts: false
 
-  collections:
-    - community.vmware
-    - ansible.builtin
-
   vars:
-    # Valores por defecto para la VM seed (se pueden sobreescribir en group_vars/all.yml)
+    venv_path: "{{ ansible_env.HOME | default('~') }}/.ansible/venvs/vmware"
+
+    # Valores por defecto (se sobreescriben con group_vars/all.yml si existen)
     seed_vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
     seed_vm_num_cpus_default: 2
     seed_vm_memory_mb_default: 4096
     seed_vm_disk_gb_default: 40
 
-    # Directorio donde se ubican las ISOs en el datastore
-    datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
-
   pre_tasks:
     ########################################################################
-    # 1) Crear venv para módulos VMware (si no existe)
+    # 1) Preparar venv con pyvmomi/requests
     ########################################################################
+
     - name: Crear venv para módulos VMware (si no existe)
       become: true
       ansible.builtin.shell: |
         set -e
-        VENV="$HOME/.ansible/venvs/vmware"
+        VENV="{{ venv_path }}"
         if [ ! -x "$VENV/bin/python" ]; then
-          mkdir -p "$HOME/.ansible/venvs"
+          mkdir -p "$(dirname "$VENV")"
           python3 -m venv "$VENV"
           "$VENV/bin/pip" install --upgrade pip
           "$VENV/bin/pip" install pyvmomi requests
@@ -38,123 +34,92 @@
 
     - name: Usar el Python del venv para este play
       ansible.builtin.set_fact:
-        ansible_python_interpreter: "{{ lookup('env', 'HOME') + '/.ansible/venvs/vmware/bin/python' }}"
+        ansible_python_interpreter: "{{ venv_path }}/bin/python"
 
     ########################################################################
-    # 2) Cargar group_vars/all.yml (si existe)
+    # 2) Cargar group_vars/all.yml (parámetros de entorno)
     ########################################################################
+
     - name: Verificar existencia de group_vars/all.yml
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../group_vars/all.yml"
-      register: gv_all_stat
+      register: all_stat
 
     - name: Cargar group_vars/all.yml si existe
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../group_vars/all.yml"
-      when: gv_all_stat.stat.exists
+      when: all_stat.stat.exists
 
     ########################################################################
-    # 3) Cargar vault.yml (si existe)
+    # 3) Cargar vault.yml con credenciales (solo si existe)
     ########################################################################
+
     - name: Verificar existencia de vault.yml en la raíz del repo
+      become: false
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../vault.yml"
       register: vault_stat
 
     - name: Cargar credenciales de vCenter desde vault.yml (si existe)
+      become: false        # IMPORTANTE: sin doas/sudo para leer el vault
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../vault.yml"
       when: vault_stat.stat.exists
       no_log: true
 
     ########################################################################
-    # 4) Resolver endpoint/credenciales desde entorno, vault y group_vars
+    # 4) Resolver parámetros finales de vCenter
     ########################################################################
+
     - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
       ansible.builtin.set_fact:
         vcenter_hostname: >-
-          {{
-            lookup('env', 'VCENTER_HOSTNAME')
-            | default(vcenter_hostname | default(''), true)
-          }}
+          {{ lookup('env', 'VCENTER_HOSTNAME')
+             or vcenter_hostname
+             | default('') }}
         vcenter_username: >-
-          {{
-            lookup('env', 'VCENTER_USERNAME')
-            | default(vcenter_username | default(''), true)
-          }}
+          {{ lookup('env', 'VCENTER_USERNAME')
+             or vcenter_username
+             | default('') }}
         vcenter_password: >-
-          {{
-            lookup('env', 'VCENTER_PASSWORD')
-            | default(vcenter_password | default(''), true)
-          }}
-        vcenter_port: >-
-          {{
-            (lookup('env', 'VCENTER_PORT') | default(443, true)) | int
-          }}
-        vcenter_validate_certs: >-
-          {{
-            (vcenter_validate_certs
-             if (vcenter_validate_certs is defined)
-             else false)
-          }}
+          {{ lookup('env', 'VCENTER_PASSWORD')
+             or vcenter_password
+             | default('') }}
         vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
         vcenter_datastore: "{{ vcenter_datastore | default('') }}"
         vcenter_cluster: "{{ vcenter_cluster | default('') }}"
         vcenter_network: "{{ vcenter_network | default('') }}"
         datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
+        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        vcenter_port: "{{ vcenter_port | default(443) }}"
 
-    ########################################################################
-    # 5) Consolidar parámetros efectivos de vCenter y scope
-    ########################################################################
     - name: Consolidar parámetros efectivos de vCenter y scope
       ansible.builtin.set_fact:
         _vc_effective:
           hostname: "{{ vcenter_hostname }}"
           username: "{{ vcenter_username }}"
-          port: "{{ vcenter_port | int }}"
-          password_from_vault: >-
-            {{
-              'YES'
-              if (vcenter_password is defined and (vcenter_password | string | length) > 0)
-              else 'NO'
-            }}
+          port: "{{ vcenter_port }}"
           datacenter: "{{ vcenter_datacenter }}"
           datastore: "{{ vcenter_datastore }}"
           cluster: "{{ vcenter_cluster }}"
           network: "{{ vcenter_network }}"
+          password_from_vault: >-
+            {{ 'YES' if (vcenter_password | default('') | length > 0) else 'NO' }}
 
     - name: Mostrar parámetros efectivos de vCenter (debug)
       ansible.builtin.debug:
         var: _vc_effective
 
     ########################################################################
-    # 6) Normalizar recursos de la VM seed
+    # 5) Normalizar recursos de la VM seed
     ########################################################################
+
     - name: Normalizar recursos de la VM seed
       ansible.builtin.set_fact:
-        seed_vm_num_cpus_eff: >-
-          {{
-            (seed_vm_num_cpus
-             if (seed_vm_num_cpus is defined and (seed_vm_num_cpus | int) > 0)
-             else seed_vm_num_cpus_default)
-          }}
-        seed_vm_memory_mb_eff: >-
-          {{
-            (seed_vm_memory_mb
-             if (seed_vm_memory_mb is defined and (seed_vm_memory_mb | int) > 0)
-             else seed_vm_memory_mb_default)
-          }}
-        seed_vm_disk_gb_eff: >-
-          {{
-            (seed_vm_disk_gb
-             if (seed_vm_disk_gb is defined and (seed_vm_disk_gb | int) > 0)
-             else seed_vm_disk_gb_default)
-          }}
+        seed_vm_num_cpus_eff: "{{ (seed_vm_num_cpus | default(seed_vm_num_cpus_default)) | int }}"
+        seed_vm_memory_mb_eff: "{{ (seed_vm_memory_mb | default(seed_vm_memory_mb_default)) | int }}"
+        seed_vm_disk_gb_eff: "{{ (seed_vm_disk_gb | default(seed_vm_disk_gb_default)) | int }}"
 
-  tasks:
-    ########################################################################
-    # 7) Debug + Validaciones
-    ########################################################################
     - name: Debug recursos de la VM seed
       ansible.builtin.debug:
         msg:
@@ -162,50 +127,49 @@
           memory_mb: "{{ seed_vm_memory_mb_eff }}"
           disk_gb: "{{ seed_vm_disk_gb_eff }}"
 
-    - name: Validar recursos de la VM seed
-      ansible.builtin.assert:
-        that:
-          - (seed_vm_num_cpus_eff | int) > 0
-          - (seed_vm_memory_mb_eff | int) > 0
-          - (seed_vm_disk_gb_eff | int) > 0
-        fail_msg: "Recursos de la VM seed inválidos."
-        success_msg: "Recursos de la VM seed OK."
+    ########################################################################
+    # 6) Validaciones
+    ########################################################################
 
     - name: Validar credenciales y endpoint de vCenter
       ansible.builtin.assert:
         that:
-          - (_vc_effective.hostname | string | length) > 0
-          - (_vc_effective.username | string | length) > 0
-          - (vcenter_password | string | length) > 0
+          - _vc_effective.hostname | length > 0
+          - _vc_effective.username | length > 0
+          - (vcenter_password | default('')) | length > 0
         fail_msg: |
-          Faltan parámetros de vCenter.
-          hostname='{{ _vc_effective.hostname | default('') }}'
-          username='{{ _vc_effective.username | default('') }}'
-          password definido='{{ (vcenter_password | string | length) > 0 }}'
-          Define en:
-            - group_vars/all.yml (vcenter_*)
-            - o vault.yml (vcenter_*)
-            - o variables de entorno VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD.
+          Faltan parámetros de vCenter. hostname='{{ _vc_effective.hostname }}' username='{{ _vc_effective.username }}'.
+          Revisa group_vars/all.yml, vault.yml o variables de entorno VCENTER_*.
         success_msg: "Parámetros de vCenter OK."
 
     - name: Validar datacenter, datastore, cluster y red
       ansible.builtin.assert:
         that:
-          - (_vc_effective.datacenter | string | length) > 0
-          - (_vc_effective.datastore | string | length) > 0
-          - (_vc_effective.cluster   | string | length) > 0
-          - (_vc_effective.network   | string | length) > 0
+          - _vc_effective.datacenter | length > 0
+          - _vc_effective.datastore | length > 0
+          - _vc_effective.cluster | length > 0
+          - _vc_effective.network | length > 0
         fail_msg: |
           Faltan vcenter_datacenter / vcenter_datastore / vcenter_cluster / vcenter_network.
           Revísalos en group_vars/all.yml.
         success_msg: "Scope de vCenter (DC/DS/Cluster/Network) OK."
 
+    - name: Validar recursos de la VM seed
+      ansible.builtin.assert:
+        that:
+          - seed_vm_num_cpus_eff | int > 0
+          - seed_vm_memory_mb_eff | int > 0
+          - seed_vm_disk_gb_eff | int > 0
+        fail_msg: "Recursos inválidos para la VM seed."
+        success_msg: "Recursos de la VM seed OK."
+
     ########################################################################
-    # 8) Definir nombres de ISOs (sin ternary raro)
+    # 7) Definir nombres de ISOs
     ########################################################################
+
     - name: Definir nombres de ISOs
       ansible.builtin.set_fact:
-        ubuntu_iso_filename: "{{ (ubuntu_iso_url | default('https://releases.ubuntu.com/24.04/ubuntu-24.04.1-live-server-amd64.iso')) | basename }}"
+        ubuntu_iso_filename: "{{ ubuntu_iso_url | basename }}"
         seed_iso_filename: "seed-{{ seed_vm_name }}.iso"
 
     - name: DEBUG nombres de ISOs
@@ -215,29 +179,51 @@
           seed_iso_filename: "{{ seed_iso_filename }}"
 
     ########################################################################
-    # 9) Crear VM base con vmware_guest (parámetros explícitos)
+    # 8) DEBUG parámetros finales antes de crear VM
     ########################################################################
+
+    - name: DEBUG parámetros vmware_guest
+      ansible.builtin.debug:
+        msg:
+          hostname: "{{ _vc_effective.hostname }}"
+          username: "{{ _vc_effective.username }}"
+          datacenter: "{{ _vc_effective.datacenter }}"
+          cluster: "{{ _vc_effective.cluster }}"
+          datastore: "{{ _vc_effective.datastore }}"
+          folder: "/{{ _vc_effective.datacenter }}/vm"
+          network: "{{ _vc_effective.network }}"
+          seed_vm_name: "{{ seed_vm_name }}"
+          num_cpus: "{{ seed_vm_num_cpus_eff }}"
+          memory_mb: "{{ seed_vm_memory_mb_eff }}"
+          disk_gb: "{{ seed_vm_disk_gb_eff }}"
+          ubuntu_iso: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
+          seed_iso: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
+
+  tasks:
+    ########################################################################
+    # 9) Crear VM base con vmware_guest
+    ########################################################################
+
     - name: Crear VM base para autoinstall
+      become: false          # usar el venv del usuario ansible
       delegate_to: localhost
-      become: false
       community.vmware.vmware_guest:
         hostname: "{{ _vc_effective.hostname }}"
         username: "{{ _vc_effective.username }}"
         password: "{{ vcenter_password }}"
-        validate_certs: "{{ (vcenter_validate_certs | default(false)) | bool }}"
-        port: "{{ vcenter_port | int }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
         datacenter: "{{ _vc_effective.datacenter }}"
-        folder: "/{{ _vc_effective.datacenter }}/vm"
         cluster: "{{ _vc_effective.cluster }}"
         datastore: "{{ _vc_effective.datastore }}"
+        folder: "/{{ _vc_effective.datacenter }}/vm"
         name: "{{ seed_vm_name }}"
         state: present
         guest_id: "ubuntu64Guest"
         hardware:
-          num_cpus: "{{ seed_vm_num_cpus_eff | int }}"
-          memory_mb: "{{ seed_vm_memory_mb_eff | int }}"
+          num_cpus: "{{ seed_vm_num_cpus_eff }}"
+          memory_mb: "{{ seed_vm_memory_mb_eff }}"
         disk:
-          - size_gb: "{{ seed_vm_disk_gb_eff | int }}"
+          - size_gb: "{{ seed_vm_disk_gb_eff }}"
             type: thin
         networks:
           - name: "{{ _vc_effective.network }}"
@@ -246,3 +232,4 @@
             iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
           - type: iso
             iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
+        wait_for_ip_address: false
