@@ -10,33 +10,33 @@
     # Carpeta (en vCenter) donde crear la VM (opcional)
     vm_folder: ""
 
-    # Carpeta dentro del datastore donde están los ISOs
+    # Carpeta dentro del datastore donde están los ISOS
     datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
     # Nombre del ISO de Ubuntu (coincide con el que subimos en 00-build-template.yml)
     ubuntu_iso_filename: >-
-      {{ (ubuntu_iso_url | default('') | basename)
-         if (ubuntu_iso_url | default('') | length > 0)
-         else 'ubuntu-24.04.1-live-server-amd64.iso' }}
+      {{
+        (ubuntu_iso_url | default('') | basename)
+        if (ubuntu_iso_url | default('') | length > 0)
+        else 'ubuntu-24.04.1-live-server-amd64.iso'
+      }}
 
     # Nombre del seed ISO generado por 00-build-template.yml
     seed_iso_filename: "seed-ubuntu-seed-24-04.iso"
 
   pre_tasks:
-
     ########################################################################
-    # 1) Preparar venv para módulos VMware
+    # 1) Preparar venv para módulos VMware (igual que en 00-build-template)
     ########################################################################
-
     - name: Crear venv para módulos VMware (si no existe)
-    ...
       ansible.builtin.shell: |
         set -e
-        if [ ! -x "$HOME/.ansible/venvs/vmware/bin/python" ]; then
+        VENV="$HOME/.ansible/venvs/vmware"
+        if [ ! -x "$VENV/bin/python" ]; then
           mkdir -p "$HOME/.ansible/venvs"
-          python3 -m venv "$HOME/.ansible/venvs/vmware"
-          "$HOME/.ansible/venvs/vmware/bin/pip" install --upgrade pip
-          "$HOME/.ansible/venvs/vmware/bin/pip" install pyvmomi requests
+          python3 -m venv "$VENV"
+          "$VENV/bin/pip" install --upgrade pip
+          "$VENV/bin/pip" install pyvmomi requests
         fi
       args:
         executable: /bin/sh
@@ -47,9 +47,8 @@
         ansible_python_interpreter: "{{ lookup('env','HOME') }}/.ansible/venvs/vmware/bin/python"
 
     ########################################################################
-    # 2) Cargar group_vars/all.yml (DC/DS/Cluster/Network + guest_ip, etc.)
+    # 2) Cargar group_vars/all.yml (parámetros globales)
     ########################################################################
-
     - name: Verificar existencia de group_vars/all.yml
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../group_vars/all.yml"
@@ -63,7 +62,6 @@
     ########################################################################
     # 3) Cargar vault.yml (credenciales vCenter)
     ########################################################################
-
     - name: Verificar existencia de vault.yml en la raíz del repo
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../vault.yml"
@@ -77,28 +75,29 @@
       no_log: true
 
     ########################################################################
-    # 4) Resolver endpoint/credenciales y scope usando:
-    #    env -> vault.yml -> group_vars/all.yml -> vars del play
+    # 4) Resolver endpoint/credenciales/scope
+    #    Prioridad: ENV > vault.yml > group_vars/all.yml > vars del play
     ########################################################################
-
     - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
       ansible.builtin.set_fact:
         vcenter_hostname: >-
           {{
             (lookup('env','VCENTER_HOSTNAME') | default('', true))
-            or (vault_vars.vcenter_hostname | default('', true))
+            or ((vault_vars | default({})).vcenter_hostname | default('', true))
             or (vcenter_hostname | default('', true))
           }}
         vcenter_username: >-
           {{
             (lookup('env','VCENTER_USERNAME') | default('', true))
-            or (vault_vars.vcenter_username | default('', true))
+            or ((vault_vars | default({})).vcenter_username | default('', true))
+            or ((vault_vars | default({})).vault_vcenter_username | default('', true))
             or (vcenter_username | default('', true))
           }}
         vcenter_password: >-
           {{
             (lookup('env','VCENTER_PASSWORD') | default('', true))
-            or (vault_vars.vcenter_password | default('', true))
+            or ((vault_vars | default({})).vcenter_password | default('', true))
+            or ((vault_vars | default({})).vault_vcenter_password | default('', true))
             or (vcenter_password | default('', true))
           }}
         vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
@@ -114,7 +113,14 @@
           hostname: "{{ vcenter_hostname | default('') }}"
           username: "{{ vcenter_username | default('') }}"
           password_from_vault: >-
-            {{ 'YES' if (vault_vars.vcenter_password | default('') | length > 0) else 'NO' }}
+            {{
+              'YES'
+              if (
+                ((vault_vars | default({})).vcenter_password | default('') | length > 0)
+                or ((vault_vars | default({})).vault_vcenter_password | default('') | length > 0)
+              )
+              else 'NO'
+            }}
           datacenter: "{{ vcenter_datacenter | default('') }}"
           datastore: "{{ vcenter_datastore | default('') }}"
           cluster: "{{ vcenter_cluster | default('') }}"
@@ -127,7 +133,6 @@
     ########################################################################
     # 5) Validaciones
     ########################################################################
-
     - name: Validar credenciales y endpoint de vCenter
       ansible.builtin.assert:
         that:
@@ -154,12 +159,19 @@
           Revísalos en group_vars/all.yml.
         success_msg: "Scope de vCenter (DC/DS/Cluster/Network) OK."
 
-  tasks:
+    - name: Validar parámetros de red de la VM seed
+      ansible.builtin.assert:
+        that:
+          - (guest_ip | default('') | length) > 0
+          - (guest_netmask | default('') | length) > 0
+          - (guest_gateway | default('') | length) > 0
+        fail_msg: "Faltan guest_ip / guest_netmask / guest_gateway en group_vars/all.yml."
+        success_msg: "Parámetros de red de la VM seed OK."
 
+  tasks:
     ########################################################################
     # 6) Crear VM base con installer ISO + seed ISO
     ########################################################################
-
     - name: Crear VM base para autoinstall
       community.vmware.vmware_guest:
         hostname: "{{ _vc_effective.hostname }}"
