@@ -13,7 +13,7 @@
     # Carpeta dentro del datastore donde están los ISOs
     datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
-    # Nombre del ISO de Ubuntu (el que subimos o definimos en all.yml)
+    # Nombre del ISO de Ubuntu (desde URL o default)
     ubuntu_iso_filename: >-
       {{
         (ubuntu_iso_url | default('') | basename)
@@ -75,8 +75,7 @@
       no_log: true
 
     ########################################################################
-    # 4) Resolver endpoint/credenciales/scope
-    #    Prioridad: ENV > vault.yml > group_vars/all.yml > vars del play
+    # 4) Resolver endpoint/credenciales/scope (ENV > vault > group_vars)
     ########################################################################
     - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
       ansible.builtin.set_fact:
@@ -106,6 +105,10 @@
         vcenter_network: "{{ vcenter_network | default('') }}"
         vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
         datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
+        guest_ip: "{{ guest_ip | default('') }}"
+        guest_netmask: "{{ guest_netmask | default('') }}"
+        guest_gateway: "{{ guest_gateway | default('') }}"
+        guest_dns: "{{ guest_dns | default([]) }}"
 
     - name: Consolidar parámetros efectivos de vCenter y scope
       ansible.builtin.set_fact:
@@ -162,9 +165,9 @@
     - name: Validar parámetros de red de la VM seed
       ansible.builtin.assert:
         that:
-          - (guest_ip | default('') | length) > 0
-          - (guest_netmask | default('') | length) > 0
-          - (guest_gateway | default('') | length) > 0
+          - (guest_ip | length) > 0
+          - (guest_netmask | length) > 0
+          - (guest_gateway | length) > 0
         fail_msg: "Faltan guest_ip / guest_netmask / guest_gateway en group_vars/all.yml."
         success_msg: "Parámetros de red de la VM seed OK."
 
@@ -187,6 +190,9 @@
         cluster: "{{ _vc_effective.cluster }}"
         datastore: "{{ _vc_effective.datastore }}"
         folder: "{{ vm_folder | default(omit) }}"
+
+        # *** Clave para tu error actual ***
+        guest_id: "ubuntu64Guest"
 
         hardware:
           num_cpus: 2
