@@ -3,38 +3,20 @@
 # Parámetros de vCenter
 # =========================
 
-# Endpoint de vCenter
 vcenter_hostname: "192.168.5.150"
-
-# Usuario de servicio en vCenter
 vcenter_username: "ansible_svc@vsphere.local"
 
-# OJO:
-# vcenter_password NO se define aquí en claro.
-# Debe venir de:
-#   - vault.yml (recomendado), o
-#   - variables de entorno VCENTER_PASSWORD
+# vcenter_password se toma de vault.yml o VCENTER_PASSWORD
 
-# Datacenter EXACTO
 vcenter_datacenter: "POPULAR_VALORES"
-
-# Datastore EXACTO
 vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
-
-# Cluster donde se desplegarán las VMs
 vcenter_cluster: "PV-CLUSTER"
-
-# Portgroup / Network
 vcenter_network: "VLAN-5"
 
-# Certificados del vCenter (false si es self-signed)
 vcenter_validate_certs: false
-
-# Carpeta dentro del datastore para ISOs
-datastore_iso_dir: "ISOS"
-
-# Puerto de vCenter (por si acaso)
 vcenter_port: 443
+
+datastore_iso_dir: "ISOS"
 
 # =========================
 # Parámetros de la VM seed
@@ -42,7 +24,6 @@ vcenter_port: 443
 
 seed_vm_name: "ubuntu-seed-24-04"
 
-# Valores por defecto (pueden sobreescribirse si quieres)
 seed_vm_num_cpus: 2
 seed_vm_memory_mb: 4096
 seed_vm_disk_gb: 40
