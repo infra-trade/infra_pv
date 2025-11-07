@@ -4,27 +4,32 @@
   gather_facts: false
 
   vars:
+    # Nombre de la VM seed (puede venir de group_vars/all.yml)
     vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
+
+    # Carpeta (en vCenter) donde crear la VM (opcional)
     vm_folder: ""
 
-    # Carpeta de ISOs en el datastore
+    # Carpeta dentro del datastore donde están los ISOs
     datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
-    # ISO installer Ubuntu (mismo que en 00)
+    # Nombre del ISO de Ubuntu (coincide con el que subimos en 00-build-template.yml)
     ubuntu_iso_filename: >-
       {{ (ubuntu_iso_url | default('') | basename)
          if (ubuntu_iso_url | default('') | length > 0)
          else 'ubuntu-24.04.1-live-server-amd64.iso' }}
 
-    # Seed ISO generado por 00-build-template.yml
+    # Nombre del seed ISO generado por 00-build-template.yml
     seed_iso_filename: "seed-ubuntu-seed-24-04.iso"
 
   pre_tasks:
+
     ########################################################################
-    # 1) Preparar venv con dependencias VMware
+    # 1) Preparar venv para módulos VMware
     ########################################################################
 
     - name: Crear venv para módulos VMware (si no existe)
+    ...
       ansible.builtin.shell: |
         set -e
         if [ ! -x "$HOME/.ansible/venvs/vmware/bin/python" ]; then
@@ -42,7 +47,7 @@
         ansible_python_interpreter: "{{ lookup('env','HOME') }}/.ansible/venvs/vmware/bin/python"
 
     ########################################################################
-    # 2) Cargar group_vars/all.yml explícitamente (para DC/DS/Cluster/Network)
+    # 2) Cargar group_vars/all.yml (DC/DS/Cluster/Network + guest_ip, etc.)
     ########################################################################
 
     - name: Verificar existencia de group_vars/all.yml
@@ -53,11 +58,10 @@
     - name: Cargar group_vars/all.yml si existe
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../group_vars/all.yml"
-        name: all_vars
       when: _all_file.stat.exists
 
     ########################################################################
-    # 3) Cargar vault.yml si existe (mismas keys vcenter_*)
+    # 3) Cargar vault.yml (credenciales vCenter)
     ########################################################################
 
     - name: Verificar existencia de vault.yml en la raíz del repo
@@ -73,7 +77,8 @@
       no_log: true
 
     ########################################################################
-    # 4) Resolver endpoint/credenciales + scope (merge entorno, vault, all_vars)
+    # 4) Resolver endpoint/credenciales y scope usando:
+    #    env -> vault.yml -> group_vars/all.yml -> vars del play
     ########################################################################
 
     - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
@@ -82,14 +87,12 @@
           {{
             (lookup('env','VCENTER_HOSTNAME') | default('', true))
             or (vault_vars.vcenter_hostname | default('', true))
-            or (all_vars.vcenter_hostname | default('', true))
             or (vcenter_hostname | default('', true))
           }}
         vcenter_username: >-
           {{
             (lookup('env','VCENTER_USERNAME') | default('', true))
             or (vault_vars.vcenter_username | default('', true))
-            or (all_vars.vcenter_username | default('', true))
             or (vcenter_username | default('', true))
           }}
         vcenter_password: >-
@@ -98,34 +101,12 @@
             or (vault_vars.vcenter_password | default('', true))
             or (vcenter_password | default('', true))
           }}
-        vcenter_datacenter: >-
-          {{
-            (all_vars.vcenter_datacenter | default('', true))
-            or (vcenter_datacenter | default('', true))
-          }}
-        vcenter_datastore: >-
-          {{
-            (all_vars.vcenter_datastore | default('', true))
-            or (vcenter_datastore | default('', true))
-          }}
-        vcenter_cluster: >-
-          {{
-            (all_vars.vcenter_cluster | default('', true))
-            or (vcenter_cluster | default('', true))
-          }}
-        vcenter_network: >-
-          {{
-            (all_vars.vcenter_network | default('', true))
-            or (vcenter_network | default('', true))
-          }}
-        vcenter_validate_certs: >-
-          {{
-            (all_vars.vcenter_validate_certs | default(false))
-          }}
-        datastore_iso_dir: >-
-          {{
-            (all_vars.datastore_iso_dir | default(datastore_iso_dir))
-          }}
+        vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
+        vcenter_datastore: "{{ vcenter_datastore | default('') }}"
+        vcenter_cluster: "{{ vcenter_cluster | default('') }}"
+        vcenter_network: "{{ vcenter_network | default('') }}"
+        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
     - name: Consolidar parámetros efectivos de vCenter y scope
       ansible.builtin.set_fact:
@@ -174,6 +155,7 @@
         success_msg: "Scope de vCenter (DC/DS/Cluster/Network) OK."
 
   tasks:
+
     ########################################################################
     # 6) Crear VM base con installer ISO + seed ISO
     ########################################################################
