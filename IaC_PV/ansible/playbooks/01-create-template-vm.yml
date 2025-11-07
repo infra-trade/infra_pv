@@ -4,7 +4,7 @@
   gather_facts: false
 
   vars:
-    # Nombre de la VM seed (desde group_vars/all.yml)
+    # Nombre de la VM seed (puede venir de group_vars/all.yml)
     vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
 
     # Carpeta lógica en vCenter (opcional)
@@ -23,11 +23,6 @@
 
     # Nombre del seed ISO generado por 00-build-template.yml
     seed_iso_filename: "seed-ubuntu-seed-24-04.iso"
-
-    # Recursos de la VM (puedes ajustarlos en group_vars/all.yml si quieres)
-    seed_vm_num_cpus: "{{ seed_vm_num_cpus | default(2) }}"
-    seed_vm_memory_mb: "{{ seed_vm_memory_mb | default(4096) }}"
-    seed_vm_disk_gb: "{{ seed_vm_disk_gb | default(40) }}"
 
   pre_tasks:
     ########################################################################
@@ -139,8 +134,14 @@
         var: _vc_effective
 
     ########################################################################
-    # 5) Validaciones
+    # 5) Normalizar recursos de la VM seed (CPU/RAM/DISCO)
     ########################################################################
+    - name: Normalizar recursos de la VM seed
+      ansible.builtin.set_fact:
+        seed_vm_num_cpus: "{{ (seed_vm_num_cpus | default(2)) | int }}"
+        seed_vm_memory_mb: "{{ (seed_vm_memory_mb | default(4096)) | int }}"
+        seed_vm_disk_gb: "{{ (seed_vm_disk_gb | default(40)) | int }}"
+
     - name: Validar credenciales y endpoint de vCenter
       ansible.builtin.assert:
         that:
@@ -199,11 +200,11 @@
         guest_id: "ubuntu64Guest"
 
         hardware:
-          num_cpus: "{{ seed_vm_num_cpus | int }}"
-          memory_mb: "{{ seed_vm_memory_mb | int }}"
+          num_cpus: "{{ seed_vm_num_cpus }}"
+          memory_mb: "{{ seed_vm_memory_mb }}"
 
         disk:
-          - size_gb: "{{ seed_vm_disk_gb | int }}"
+          - size_gb: "{{ seed_vm_disk_gb }}"
             type: thin
             datastore: "{{ _vc_effective.datastore }}"
 
