@@ -177,24 +177,25 @@
           seed_iso_filename: "{{ seed_iso_filename }}"
 
     ########################################################################
-    # 8) DEBUG parámetros para vmware_guest
+    # 8) DEBUG parámetros finales para vmware_guest
     ########################################################################
 
     - name: DEBUG parámetros vmware_guest
       ansible.builtin.debug:
         msg:
-          hostname: "{{ _vc_effective.hostname }}"
-          username: "{{ _vc_effective.username }}"
-          datacenter: "{{ _vc_effective.datacenter }}"
-          datastore: "{{ _vc_effective.datastore }}"
-          cluster: "{{ _vc_effective.cluster }}"
+          hostname: "{{ _vc_effective.hostname }} ({{ _vc_effective.hostname | type_debug }})"
+          username: "{{ _vc_effective.username }} ({{ _vc_effective.username | type_debug }})"
+          datacenter: "{{ _vc_effective.datacenter }} ({{ _vc_effective.datacenter | type_debug }})"
+          datastore: "{{ _vc_effective.datastore }} ({{ _vc_effective.datastore | type_debug }})"
+          cluster: "{{ _vc_effective.cluster }} ({{ _vc_effective.cluster | type_debug }})"
           folder: "/{{ _vc_effective.datacenter }}/vm"
-          network: "{{ _vc_effective.network }}"
-          num_cpus: "{{ seed_vm_num_cpus_eff }}"
-          memory_mb: "{{ seed_vm_memory_mb_eff }}"
-          disk_gb: "{{ seed_vm_disk_gb_eff }}"
+          network: "{{ _vc_effective.network }} ({{ _vc_effective.network | type_debug }})"
+          num_cpus: "{{ seed_vm_num_cpus_eff }} ({{ seed_vm_num_cpus_eff | type_debug }})"
+          memory_mb: "{{ seed_vm_memory_mb_eff }} ({{ seed_vm_memory_mb_eff | type_debug }})"
+          disk_gb: "{{ seed_vm_disk_gb_eff }} ({{ seed_vm_disk_gb_eff | type_debug }})"
           ubuntu_iso: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
           seed_iso: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
+          have_password: "{{ 'YES' if (vcenter_password | default('') | length > 0) else 'NO' }}"
 
   tasks:
     ########################################################################
@@ -209,7 +210,7 @@
         username: "{{ _vc_effective.username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs }}"
-        port: "{{ _vc_effective.port | default(443) | int }}"
+        # port: se omite para usar el default del módulo (443)
         datacenter: "{{ _vc_effective.datacenter }}"
         cluster: "{{ _vc_effective.cluster }}"
         datastore: "{{ _vc_effective.datastore }}"
