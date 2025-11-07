@@ -7,17 +7,12 @@
     - ansible.builtin
 
   vars:
-    # Mismo venv que usamos en 00-build-template.yml
     vmware_venv: "/home/ansible/.ansible/venvs/vmware"
     vmware_python: "{{ vmware_venv }}/bin/python3"
 
-    # Nombre de la VM seed / template
     seed_vm_name: "ubuntu-seed-24-04"
 
-    # Ruta del installer ISO dentro del datastore
     ubuntu_installer_iso_path: "ISOS/ubuntu-24.04.1-live-server-amd64.iso"
-
-    # Nombre del seed ISO generado por 00-build-template.yml
     seed_iso_name: "seed-ubuntu-seed-24-04.iso"
     seed_iso_datastore_path: "ISOS/{{ seed_iso_name }}"
 
@@ -47,9 +42,7 @@
 
     ########################################################################
     # 2) Cargar credenciales desde vault.yml (si existe)
-    #    Espera un archivo:
-    #      ansible/vault.yml
-    #    con algo como:
+    #    Espera ansible/vault.yml con:
     #      vcenter_hostname: 192.168.5.150
     #      vault_vcenter_username: "ansible_svc@vsphere.local"
     #      vault_vcenter_password: "xxxx"
@@ -62,9 +55,9 @@
 
     ########################################################################
     # 3) Resolver endpoint/credenciales desde:
-    #    - variables de entorno VCENTER_*
+    #    - entorno VCENTER_*
     #    - group_vars/all.yml (vcenter_*)
-    #    - vault.yml (vcenter_hostname, vault_vcenter_username, vault_vcenter_password)
+    #    - vault.yml (vault_vcenter_username, vault_vcenter_password)
     ########################################################################
     - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
       ansible.builtin.set_fact:
@@ -85,7 +78,6 @@
             or (vcenter_password | default('', true))
             or (vault_vcenter_password | default('', true))
           }}
-        # Scope vSphere con defaults razonables (ajusta si quieres)
         vcenter_datacenter: "{{ vcenter_datacenter | default('POPULAR_VALORES') }}"
         vcenter_cluster: "{{ vcenter_cluster | default('PV-CLUSTER') }}"
         vcenter_datastore: "{{ vcenter_datastore | default('PURESTORAGE_PV_X20R4_VOL_1') }}"
@@ -133,11 +125,14 @@
         state: present
         guest_id: ubuntu64Guest
 
+        # A partir de tu módulo: firmware va como boot_firmware arriba, no dentro de hardware
+        boot_firmware: efi
+        secure_boot: false
+
         hardware:
           memory_mb: 4096
           num_cpus: 2
           scsi: paravirtual
-          firmware: efi
 
         disk:
           - size_gb: 40
