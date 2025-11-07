@@ -26,7 +26,7 @@
 
   pre_tasks:
     ########################################################################
-    # 1) Preparar venv para módulos VMware
+    # 1) Preparar venv VMware
     ########################################################################
     - name: Crear venv para módulos VMware (si no existe)
       ansible.builtin.shell: |
@@ -47,7 +47,7 @@
         ansible_python_interpreter: "{{ lookup('env','HOME') }}/.ansible/venvs/vmware/bin/python"
 
     ########################################################################
-    # 2) Cargar group_vars/all.yml (parámetros globales)
+    # 2) Cargar group_vars/all.yml
     ########################################################################
     - name: Verificar existencia de group_vars/all.yml
       ansible.builtin.stat:
@@ -105,10 +105,6 @@
         vcenter_network: "{{ vcenter_network | default('') }}"
         vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
         datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
-        guest_ip: "{{ guest_ip | default('') }}"
-        guest_netmask: "{{ guest_netmask | default('') }}"
-        guest_gateway: "{{ guest_gateway | default('') }}"
-        guest_dns: "{{ guest_dns | default([]) }}"
 
     - name: Consolidar parámetros efectivos de vCenter y scope
       ansible.builtin.set_fact:
@@ -134,7 +130,7 @@
         var: _vc_effective
 
     ########################################################################
-    # 5) Normalizar recursos de la VM seed (CPU/RAM/DISCO)
+    # 5) Normalizar recursos VM seed (todo en INT, sin recursión rara)
     ########################################################################
     - name: Normalizar recursos de la VM seed
       ansible.builtin.set_fact:
@@ -187,60 +183,50 @@
           Revísalos en group_vars/all.yml.
         success_msg: "Scope de vCenter (DC/DS/Cluster/Network) OK."
 
-    - name: Validar parámetros de red de la VM seed
-      ansible.builtin.assert:
-        that:
-          - (guest_ip | length) > 0
-          - (guest_netmask | length) > 0
-          - (guest_gateway | length) > 0
-        fail_msg: "Faltan guest_ip / guest_netmask / guest_gateway en group_vars/all.yml."
-        success_msg: "Parámetros de red de la VM seed OK."
-
   tasks:
     ########################################################################
-    # 6) Crear VM base con installer ISO + seed ISO
+    # 6) Construir parámetros y crear la VM base
     ########################################################################
+    - name: Construir parámetros para vmware_guest
+      ansible.builtin.set_fact:
+        vmware_guest_params:
+          hostname: "{{ _vc_effective.hostname }}"
+          username: "{{ _vc_effective.username }}"
+          password: "{{ vcenter_password }}"
+          validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+
+          datacenter: "{{ _vc_effective.datacenter }}"
+          cluster: "{{ _vc_effective.cluster }}"
+          datastore: "{{ _vc_effective.datastore }}"
+
+          name: "{{ vm_name }}"
+          state: poweredoff
+          is_template: false
+          guest_id: "ubuntu64Guest"
+
+          hardware:
+            num_cpus: "{{ seed_vm_num_cpus }}"
+            memory_mb: "{{ seed_vm_memory_mb }}"
+
+          disk:
+            - size_gb: "{{ seed_vm_disk_gb }}"
+              type: thin
+
+          networks:
+            - name: "{{ _vc_effective.network }}"
+
+          cdrom:
+            - type: iso
+              iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
+            - type: iso
+              iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
+
+          wait_for_ip_address: false
+
+    - name: DEBUG parámetros vmware_guest
+      ansible.builtin.debug:
+        var: vmware_guest_params
+
     - name: Crear VM base para autoinstall
-      community.vmware.vmware_guest:
-        hostname: "{{ _vc_effective.hostname }}"
-        username: "{{ _vc_effective.username }}"
-        password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-
-        name: "{{ vm_name }}"
-        state: poweredoff
-        is_template: false
-
-        datacenter: "{{ _vc_effective.datacenter }}"
-        cluster: "{{ _vc_effective.cluster }}"
-        datastore: "{{ _vc_effective.datastore }}"
-        folder: "{{ vm_folder | default(omit) }}"
-
-        guest_id: "ubuntu64Guest"
-
-        hardware:
-          num_cpus: "{{ seed_vm_num_cpus | int }}"
-          memory_mb: "{{ seed_vm_memory_mb | int }}"
-
-        disk:
-          - size_gb: "{{ seed_vm_disk_gb | int }}"
-            type: thin
-            datastore: "{{ _vc_effective.datastore }}"
-
-        networks:
-          - name: "{{ _vc_effective.network }}"
-            type: static
-            ip: "{{ guest_ip }}"
-            netmask: "{{ guest_netmask }}"
-            gateway: "{{ guest_gateway }}"
-            dns_servers: "{{ guest_dns if (guest_dns | length > 0) else omit }}"
-
-        cdrom:
-          - type: iso
-            iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
-          - type: iso
-            iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
-
-        wait_for_ip_address: false
-
+      community.vmware.vmware_guest: "{{ vmware_guest_params }}"
       delegate_to: localhost
