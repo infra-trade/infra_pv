@@ -7,10 +7,10 @@
     # Nombre de la VM seed
     vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
 
-    # Carpeta dentro del datastore donde están los ISOs
+    # Carpeta dentro del datastore donde están los ISOS
     datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
-    # Nombre del ISO de Ubuntu (si usaste 00, ya está subido con este nombre)
+    # Nombre del ISO de Ubuntu (debe existir en el datastore)
     ubuntu_iso_filename: >-
       {{
         (ubuntu_iso_url | default('') | basename)
@@ -96,11 +96,7 @@
             or ((vault_vars | default({})).vault_vcenter_password | default('', true))
             or (vcenter_password | default('', true))
           }}
-        # Puerto explícito para evitar el bug de int(None)
-        vcenter_port: >-
-          {{
-            (lookup('env','VCENTER_PORT') | default(443, true)) | int
-          }}
+        vcenter_port: "{{ (lookup('env','VCENTER_PORT') | default(443, true)) | int }}"
         vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
         vcenter_datastore: "{{ vcenter_datastore | default('') }}"
         vcenter_cluster: "{{ vcenter_cluster | default('') }}"
@@ -111,12 +107,12 @@
     - name: Consolidar parámetros efectivos de vCenter y scope
       ansible.builtin.set_fact:
         _vc_effective:
-          hostname: "{{ vcenter_hostname | default('') }}"
-          username: "{{ vcenter_username | default('') }}"
-          datacenter: "{{ vcenter_datacenter | default('') }}"
-          datastore: "{{ vcenter_datastore | default('') }}"
-          cluster: "{{ vcenter_cluster | default('') }}"
-          network: "{{ vcenter_network | default('') }}"
+          hostname: "{{ vcenter_hostname }}"
+          username: "{{ vcenter_username }}"
+          datacenter: "{{ vcenter_datacenter }}"
+          datastore: "{{ vcenter_datastore }}"
+          cluster: "{{ vcenter_cluster }}"
+          network: "{{ vcenter_network }}"
           port: "{{ vcenter_port | int }}"
           password_from_vault: >-
             {{
@@ -175,15 +171,15 @@
 
   tasks:
     ########################################################################
-    # 6) Crear VM base con installer ISO + seed ISO
+    # 6) Crear VM base con installer ISO + seed ISO (llamada directa)
     ########################################################################
     - name: Crear VM base para autoinstall
       community.vmware.vmware_guest:
         hostname: "{{ _vc_effective.hostname }}"
         username: "{{ _vc_effective.username }}"
         password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs }}"
-        port: "{{ _vc_effective.port }}"
+        validate_certs: "{{ vcenter_validate_certs | bool }}"
+        port: "{{ _vc_effective.port | int }}"
 
         datacenter: "{{ _vc_effective.datacenter }}"
         cluster: "{{ _vc_effective.cluster }}"
@@ -193,14 +189,14 @@
         name: "{{ vm_name }}"
         state: poweredoff
         is_template: false
-        guest_id: "ubuntu64Guest"
+        guest_id: ubuntu64Guest
 
         hardware:
-          num_cpus: "{{ seed_vm_num_cpus_eff }}"
-          memory_mb: "{{ seed_vm_memory_mb_eff }}"
+          num_cpus: "{{ seed_vm_num_cpus_eff | int }}"
+          memory_mb: "{{ seed_vm_memory_mb_eff | int }}"
 
         disk:
-          - size_gb: "{{ seed_vm_disk_gb_eff }}"
+          - size_gb: "{{ seed_vm_disk_gb_eff | int }}"
             type: thin
 
         networks:
@@ -213,5 +209,7 @@
             iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
 
         wait_for_ip_address: false
+        state_change_timeout: 600
+        wait_for_customization: false
 
       delegate_to: localhost
