@@ -2,81 +2,83 @@
 - name: Crear VM base Ubuntu 24.04 usando autoinstall + seed ISO
   hosts: localhost
   gather_facts: false
+  connection: local
 
   vars:
-    # Nombre de la VM "seed"
+    # Nombre de la VM seed/template
     seed_vm_name: "ubuntu-seed-24-04"
 
-    # Carpeta de VMs en el inventario (ajusta si quieres otra)
-    vm_folder: "PV_IaC"
-
-    # Recursos de la VM base
+    # Recursos de la VM
     seed_vm_cpu: 2
     seed_vm_memory_mb: 4096
-    seed_vm_disk_gb: 40
+    seed_vm_disk_gb: 30
 
-    # Scope en vCenter: si no viene de group_vars, toma estos defaults
-    vcenter_datacenter: "{{ vcenter_datacenter | default('POPULAR_VALORES') }}"
-    vcenter_datastore: "{{ vcenter_datastore | default('PURESTORAGE_PV_X20R4_VOL_1') }}"
-    vcenter_cluster: "{{ vcenter_cluster | default('PV-CLUSTER') }}"
-    vcenter_network: "{{ vcenter_network | default('VLAN-5') }}"
+    # Red / cluster
+    vcenter_cluster: "PV-CLUSTER"
+    vcenter_network: "VLAN-5"
 
-    # Rutas dentro del datastore (deben existir)
-    iso_installer_path: "ISOS/ubuntu-24.04.1-live-server-amd64.iso"
-    iso_seed_path: "ISOS/seed-ubuntu-seed-24-04.iso"
+    # Datastore / carpeta donde está el ISO de Ubuntu y el seed ISO
+    iso_datastore: "{{ vcenter_datastore | default('PURESTORAGE_PV_X20R4_VOL_1') }}"
+    iso_folder: "ISOS"
+
+    # Nombres de ISO esperados en el datastore
+    ubuntu_iso_filename: "ubuntu-24.04.1-live-server-amd64.iso"
+    seed_iso_filename: "seed-ubuntu-seed-24-04.iso"
 
   pre_tasks:
     ####################################################################
-    # 1) Cargar credenciales desde vault.yml en la raíz del repo
-    #    Ruta absoluta efectiva:
-    #      /home/ansible/infra_pv/IaC_PV/IaC_PV/ansible/vault.yml
-    #    Desde este playbook (en playbooks/): ../vault.yml
+    # 1) Cargar credenciales desde vault.yml (si existe)
     ####################################################################
-    - name: Cargar credenciales de vCenter desde ../vault.yml (si existe)
+    - name: Cargar credenciales de vCenter desde vault.yml (si existe)
       ansible.builtin.include_vars:
-        file: "../vault.yml"
-      register: _vault_load
+        file: "{{ item }}"
+        name: vault_vcenter
+      with_first_found:
+        - "../vault.yml"
+        - "vault.yml"
       ignore_errors: true
-      failed_when: false
-      run_once: true
+      no_log: true
 
     ####################################################################
-    # 2) Resolver endpoint/credenciales combinando:
-    #      - variables de entorno VCENTER_*
-    #      - vars ya definidas (group_vars/all.yml)
-    #      - contenido de vault.yml (vcenter_*)
+    # 2) Resolver endpoint/credenciales desde entorno, vault y group_vars
     ####################################################################
-    - name: Resolver endpoint/credenciales desde entorno, group_vars y vault
+    - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
       ansible.builtin.set_fact:
         vcenter_hostname: >-
-          {{
-            (lookup('env', 'VCENTER_HOSTNAME') | default('', true))
-            or (vcenter_hostname | default('', true))
-            or (vcenter_hostname | default('', true))
-          }}
+          {{ (
+               lookup('env', 'VCENTER_HOSTNAME')
+               | default(vcenter_hostname, true)
+               | default(vault_vcenter.vcenter_hostname, true)
+             ) | default('', true) }}
         vcenter_username: >-
-          {{
-            (lookup('env', 'VCENTER_USERNAME') | default('', true))
-            or (vcenter_username | default('', true))
-          }}
+          {{ (
+               lookup('env', 'VCENTER_USERNAME')
+               | default(vcenter_username, true)
+               | default(vault_vcenter.vcenter_username, true)
+             ) | default('', true) }}
         vcenter_password: >-
-          {{
-            (lookup('env', 'VCENTER_PASSWORD') | default('', true))
-            or (vcenter_password | default('', true))
-          }}
-      run_once: true
+          {{ (
+               lookup('env', 'VCENTER_PASSWORD')
+               | default(vcenter_password, true)
+               | default(vault_vcenter.vcenter_password, true)
+             ) | default('', true) }}
+      no_log: true
 
     ####################################################################
-    # 3) Mostrar parámetros efectivos (debug)
+    # 3) Consolidar y mostrar (sin password)
     ####################################################################
-    - name: Mostrar parámetros efectivos de vCenter (debug)
-      ansible.builtin.debug:
-        msg:
+    - name: Consolidar parámetros efectivos de vCenter y scope
+      ansible.builtin.set_fact:
+        _vc_effective:
           hostname: "{{ vcenter_hostname | default('') }}"
           username: "{{ vcenter_username | default('') }}"
           password_from_vault: >-
             {{ 'YES' if (vcenter_password | default('') | length > 0) else 'NO' }}
-      run_once: true
+
+    - name: Mostrar parámetros efectivos de vCenter (debug)
+      ansible.builtin.debug:
+        var: _vc_effective
+      no_log: false
 
     ####################################################################
     # 4) Validar que tenemos todo
@@ -89,20 +91,13 @@
           - (vcenter_password | default('')) | length > 0
         fail_msg: |
           Faltan parámetros de vCenter. hostname='{{ vcenter_hostname | default('') }}' username='{{ vcenter_username | default('') }}'.
-          Define alguno de estos:
-            - vault.yml en la raíz del repo con:
-                vcenter_hostname: 192.168.5.150
-                vcenter_username: ansible_svc@vsphere.local
-                vcenter_password: <clave>
-            - o group_vars/all.yml con vcenter_*
+          Define en:
+            - group_vars/all.yml (vcenter_*)
+            - o vault.yml (vcenter_*)
             - o variables de entorno VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD.
         success_msg: "Parámetros de vCenter OK."
-      run_once: true
 
   tasks:
-    ####################################################################
-    # 5) Crear VM base para autoinstall
-    ####################################################################
     - name: Crear VM base para autoinstall
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
@@ -110,14 +105,12 @@
         password: "{{ vcenter_password }}"
         validate_certs: false
 
-        datacenter: "{{ vcenter_datacenter }}"
+        datacenter: "{{ vcenter_datacenter | default('POPULAR_VALORES') }}"
         cluster: "{{ vcenter_cluster }}"
-        folder: "{{ vm_folder | default('') }}"
-
         name: "{{ seed_vm_name }}"
         state: poweredoff
 
-        guest_id: ubuntu64Guest
+        guest_id: "ubuntu64Guest"
 
         hardware:
           memory_mb: "{{ seed_vm_memory_mb }}"
@@ -127,16 +120,18 @@
         disk:
           - size_gb: "{{ seed_vm_disk_gb }}"
             type: thin
-            datastore: "{{ vcenter_datastore }}"
+            datastore: "{{ iso_datastore }}"
 
         networks:
           - name: "{{ vcenter_network }}"
-            type: vmxnet3
+            type: static
+            # Si prefieres DHCP en la seed, puedes quitar ip/gateway/netmask
 
         cdrom:
           - type: iso
-            iso_path: "{{ vcenter_datacenter }}/datastore/{{ vcenter_datastore }}/{{ iso_installer_path }}"
+            iso_path: "[{{ iso_datastore }}] {{ iso_folder }}/{{ ubuntu_iso_filename }}"
           - type: iso
-            iso_path: "{{ vcenter_datacenter }}/datastore/{{ vcenter_datastore }}/{{ iso_seed_path }}"
+            iso_path: "[{{ iso_datastore }}] {{ iso_folder }}/{{ seed_iso_filename }}"
+
+        wait_for_ip_address: no
       delegate_to: localhost
-      run_once: true
