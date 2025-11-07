@@ -6,21 +6,21 @@
   become_method: doas
 
   vars:
-    # Defaults de la VM seed (pueden venir overrideados desde group_vars/all.yml)
+    # Defaults de la VM seed (pueden overridearse en group_vars/all.yml)
     seed_vm_name: "ubuntu-seed-24-04"
     seed_vm_num_cpus: 2
     seed_vm_memory_mb: 4096
     seed_vm_disk_gb: 40
 
-    # Carpeta de ISOs en el datastore (también en all.yml)
+    # Carpeta donde están los ISOs en el datastore
     datastore_iso_dir: "ISOS"
 
-    # URL por defecto del ISO de Ubuntu (all.yml ya la define)
+    # URL por defecto de Ubuntu ISO (group_vars puede overridear)
     ubuntu_iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04.1-live-server-amd64.iso"
 
   tasks:
     ########################################################################
-    # 1) Crear venv para módulos VMware
+    # 1) Crear / usar venv para módulos VMware
     ########################################################################
     - name: Crear venv para módulos VMware (si no existe)
       ansible.builtin.shell: |
@@ -38,7 +38,7 @@
 
     - name: Usar el Python del venv para este play
       ansible.builtin.set_fact:
-        ansible_python_interpreter: "{{ lookup('env', 'HOME') + '/.ansible/venvs/vmware/bin/python' }}"
+        ansible_python_interpreter: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware/bin/python' }}"
 
     ########################################################################
     # 2) Cargar group_vars/all.yml
@@ -54,7 +54,7 @@
       when: all_yml_stat.stat.exists
 
     ########################################################################
-    # 3) Cargar vault.yml (en raíz del repo)
+    # 3) Cargar vault.yml desde la raíz del repo
     ########################################################################
     - name: Verificar existencia de vault.yml en la raíz del repo
       ansible.builtin.stat:
@@ -73,17 +73,17 @@
     - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
       ansible.builtin.set_fact:
         vcenter_hostname: >-
-          {{ lookup('env', 'VCENTER_HOSTNAME')
+          {{ lookup('env','VCENTER_HOSTNAME')
              | default(vcenter_hostname | default('', true), true) }}
         vcenter_username: >-
-          {{ lookup('env', 'VCENTER_USERNAME')
+          {{ lookup('env','VCENTER_USERNAME')
              | default(vcenter_username | default('', true), true) }}
         vcenter_password: >-
-          {{ lookup('env', 'VCENTER_PASSWORD')
+          {{ lookup('env','VCENTER_PASSWORD')
              | default(vcenter_password | default('', true), true) }}
         vcenter_port: >-
-          {{ (lookup('env', 'VCENTER_PORT')
-              | default(vcenter_port | default(443, true), true)) | int }}
+          {{ (lookup('env','VCENTER_PORT')
+             | default(vcenter_port | default(443, true), true)) | int }}
         vcenter_datacenter: "{{ vcenter_datacenter | default('', true) }}"
         vcenter_datastore: "{{ vcenter_datastore | default('', true) }}"
         vcenter_cluster: "{{ vcenter_cluster | default('', true) }}"
@@ -178,7 +178,30 @@
           seed_iso_filename: "{{ seed_iso_filename }}"
 
     ########################################################################
-    # 8) Crear VM base con vmware_guest (sin dict templated)
+    # 8) DEBUG argumentos efectivos para vmware_guest
+    ########################################################################
+    - name: DEBUG parámetros vmware_guest
+      ansible.builtin.debug:
+        msg:
+          hostname: "{{ _vc_effective.hostname }}"
+          username: "{{ _vc_effective.username }}"
+          port: "{{ _vc_effective.port | int }}"
+          datacenter: "{{ _vc_effective.datacenter }}"
+          cluster: "{{ _vc_effective.cluster }}"
+          datastore: "{{ _vc_effective.datastore }}"
+          folder: "/{{ _vc_effective.datacenter }}/vm"
+          name: "{{ seed_vm_name }}"
+          guest_id: "ubuntu64Guest"
+          num_cpus: "{{ seed_vm_num_cpus_eff }}"
+          memory_mb: "{{ seed_vm_memory_mb_eff }}"
+          disk_gb: "{{ seed_vm_disk_gb_eff }}"
+          network: "{{ _vc_effective.network }}"
+          ubuntu_iso: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
+          seed_iso: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
+          have_password: "{{ 'YES' if (vcenter_password | default('') | length > 0) else 'NO' }}"
+
+    ########################################################################
+    # 9) Crear VM base con vmware_guest (llamada limpia)
     ########################################################################
     - name: Crear VM base para autoinstall
       become: false
@@ -187,7 +210,8 @@
         hostname: "{{ _vc_effective.hostname }}"
         username: "{{ _vc_effective.username }}"
         password: "{{ vcenter_password }}"
-        validate_certs: "{{ _vc_effective.validate_certs }}"
+        port: "{{ _vc_effective.port | int }}"
+        validate_certs: "{{ _vc_effective.validate_certs | bool }}"
         datacenter: "{{ _vc_effective.datacenter }}"
         cluster: "{{ _vc_effective.cluster }}"
         datastore: "{{ _vc_effective.datastore }}"
@@ -197,10 +221,10 @@
         guest_id: "ubuntu64Guest"
         is_template: false
         hardware:
-          num_cpus: "{{ seed_vm_num_cpus_eff }}"
-          memory_mb: "{{ seed_vm_memory_mb_eff }}"
+          num_cpus: "{{ seed_vm_num_cpus_eff | int }}"
+          memory_mb: "{{ seed_vm_memory_mb_eff | int }}"
         disk:
-          - size_gb: "{{ seed_vm_disk_gb_eff }}"
+          - size_gb: "{{ seed_vm_disk_gb_eff | int }}"
             type: thin
         networks:
           - name: "{{ _vc_effective.network }}"
