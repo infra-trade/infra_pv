@@ -7,18 +7,18 @@
   vars:
     # Directorio HOME y venv VMware con ruta absoluta
     home_dir: "{{ lookup('env', 'HOME') }}"
-    vmware_venv_path: "{{ lookup('env', 'VMWARE_VENV') | default(home_dir + '/.ansible/venvs/vmware', true) }}"
+    vmware_venv_path: "{{ home_dir }}/.ansible/venvs/vmware"
 
-    # Nombre de la VM seed
+    # Nombre de la VM seed (la que hará autoinstall)
     seed_vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
 
-    # Nombre de template final (reservado para pasos siguientes)
+    # Nombre (reservado) del template final que podrías crear luego
     template_name: "{{ template_name | default('ubuntu-24-04-template') }}"
 
     # Validación de certificados vCenter
     vcenter_validate_certs: false
 
-    # Carpeta en datastore donde están los ISOs
+    # Carpeta del datastore donde están los ISOs
     datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
   pre_tasks:
@@ -44,7 +44,7 @@
     ########################################################################
     # 2) Cargar vault.yml si existe
     #    Se asume vault.yml en la raíz del repo Ansible:
-    #    /home/ansible/infra_pv/IaC_PV/IaC_PV/ansible/vault.yml
+    #    .../ansible/vault.yml
     ########################################################################
 
     - name: Verificar existencia de vault.yml en la raíz del repo
@@ -63,9 +63,9 @@
     ########################################################################
     # 3) Resolver parámetros efectivos de vCenter
     #    Prioridad:
-    #      1) Variables de entorno
+    #      1) Variables de entorno VCENTER_*
     #      2) group_vars/all.yml (vcenter_*)
-    #      3) vault.yml (vcenter_hostname, vault_vcenter_username, vault_vcenter_password)
+    #      3) vault.yml (acepta ambas variantes: vcenter_* y vault_vcenter_*)
     ########################################################################
 
     - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
@@ -75,17 +75,20 @@
             (lookup('env', 'VCENTER_HOSTNAME') | default('', true))
             or (vcenter_hostname | default('', true))
             or (vault_vcenter.vcenter_hostname | default('', true))
+            or (vault_vcenter.vault_vcenter_hostname | default('', true))
           }}
         vcenter_username: >-
           {{
             (lookup('env', 'VCENTER_USERNAME') | default('', true))
             or (vcenter_username | default('', true))
+            or (vault_vcenter.vcenter_username | default('', true))
             or (vault_vcenter.vault_vcenter_username | default('', true))
           }}
         vcenter_password: >-
           {{
             (lookup('env', 'VCENTER_PASSWORD') | default('', true))
             or (vcenter_password | default('', true))
+            or (vault_vcenter.vcenter_password | default('', true))
             or (vault_vcenter.vault_vcenter_password | default('', true))
           }}
 
@@ -95,7 +98,14 @@
           hostname: "{{ vcenter_hostname | default('') }}"
           username: "{{ vcenter_username | default('') }}"
           password_from_vault: >-
-            {{ 'YES' if (vault_vcenter.vault_vcenter_password | default('') | length > 0) else 'NO' }}
+            {{
+              'YES'
+              if (
+                (vault_vcenter.vcenter_password | default('') | length > 0)
+                or (vault_vcenter.vault_vcenter_password | default('') | length > 0)
+              )
+              else 'NO'
+            }}
           datacenter: "{{ vcenter_datacenter | default('') }}"
           datastore: "{{ vcenter_datastore | default('') }}"
           cluster: "{{ vcenter_cluster | default('') }}"
@@ -115,7 +125,8 @@
           Faltan parámetros de vCenter. hostname='{{ _vc_effective.hostname }}' username='{{ _vc_effective.username }}'.
           Define en:
             - group_vars/all.yml (vcenter_*)
-            - o vault.yml (vcenter_hostname, vault_vcenter_username, vault_vcenter_password)
+            - o vault.yml (vcenter_hostname, vcenter_username, vcenter_password
+              o vault_vcenter_username/vault_vcenter_password)
             - o variables de entorno VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD.
 
     - name: Validar datacenter, datastore, cluster y red
