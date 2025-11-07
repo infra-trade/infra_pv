@@ -62,7 +62,6 @@
     ########################################################################
     - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
       ansible.builtin.set_fact:
-        # credenciales / endpoint
         vcenter_hostname: >-
           {{ lookup('env','VCENTER_HOSTNAME')
              | default(vcenter_hostname | default(''), true) }}
@@ -72,24 +71,18 @@
         vcenter_password: >-
           {{ lookup('env','VCENTER_PASSWORD')
              | default(vcenter_password | default(''), true) }}
-        vcenter_port: >-
-          {{ (lookup('env','VCENTER_PORT')
-              | default(vcenter_port | default(443), true)) | int }}
 
-        # scope
         vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
         vcenter_datastore: "{{ vcenter_datastore | default('') }}"
         vcenter_cluster: "{{ vcenter_cluster | default('') }}"
         vcenter_network: "{{ vcenter_network | default('') }}"
-
-        # carpeta de ISOs
         datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
+        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
 
     - name: Consolidar parámetros efectivos de vCenter y scope
       ansible.builtin.set_fact:
         _vc_effective:
           hostname: "{{ vcenter_hostname }}"
-          port: "{{ vcenter_port | int }}"
           username: "{{ vcenter_username }}"
           datacenter: "{{ vcenter_datacenter }}"
           datastore: "{{ vcenter_datastore }}"
@@ -169,17 +162,37 @@
           ubuntu_iso_filename: "{{ ubuntu_iso_filename }}"
           seed_iso_filename: "{{ seed_iso_filename }}"
 
+    ########################################################################
+    # 8) DEBUG parámetros efectivos para vmware_guest
+    ########################################################################
+    - name: DEBUG parámetros vmware_guest
+      ansible.builtin.debug:
+        msg:
+          hostname: "{{ _vc_effective.hostname }}"
+          username: "{{ _vc_effective.username }}"
+          have_password: "{{ 'YES' if (vcenter_password | length) > 0 else 'NO' }}"
+          datacenter: "{{ _vc_effective.datacenter }}"
+          datastore: "{{ _vc_effective.datastore }}"
+          cluster: "{{ _vc_effective.cluster }}"
+          folder: "/{{ _vc_effective.datacenter }}/vm"
+          guest_id: "ubuntu64Guest"
+          num_cpus: "{{ seed_vm_num_cpus_eff }}"
+          memory_mb: "{{ seed_vm_memory_mb_eff }}"
+          disk_gb: "{{ seed_vm_disk_gb_eff }}"
+          network: "{{ _vc_effective.network }}"
+          ubuntu_iso: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
+          seed_iso: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
+
   tasks:
     ########################################################################
-    # 8) Crear VM base con installer ISO + seed ISO
+    # 9) Crear VM base con installer ISO + seed ISO (llamada limpia)
     ########################################################################
     - name: Crear VM base para autoinstall
       community.vmware.vmware_guest:
         hostname: "{{ _vc_effective.hostname }}"
         username: "{{ _vc_effective.username }}"
         password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-        port: "{{ _vc_effective.port | int }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
 
         datacenter: "{{ _vc_effective.datacenter }}"
         cluster: "{{ _vc_effective.cluster }}"
@@ -192,11 +205,11 @@
         is_template: false
 
         hardware:
-          num_cpus: "{{ seed_vm_num_cpus_eff }}"
-          memory_mb: "{{ seed_vm_memory_mb_eff }}"
+          num_cpus: "{{ seed_vm_num_cpus_eff | int }}"
+          memory_mb: "{{ seed_vm_memory_mb_eff | int }}"
 
         disk:
-          - size_gb: "{{ seed_vm_disk_gb_eff }}"
+          - size_gb: "{{ seed_vm_disk_gb_eff | int }}"
             type: thin
 
         networks:
