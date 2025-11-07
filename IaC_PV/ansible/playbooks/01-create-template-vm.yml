@@ -6,21 +6,19 @@
   become_method: doas
 
   vars:
-    # Defaults VM seed (pueden overridearse en group_vars/all.yml)
+    # Valores por defecto (pueden sobreescribirse en group_vars/all.yml)
     seed_vm_name: "ubuntu-seed-24-04"
     seed_vm_num_cpus: 2
     seed_vm_memory_mb: 4096
     seed_vm_disk_gb: 40
 
-    # Carpeta en datastore donde están los ISOs
     datastore_iso_dir: "ISOS"
 
-    # URL ISO Ubuntu (de aquí sacamos el nombre si no viene dado)
     ubuntu_iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04.1-live-server-amd64.iso"
 
   tasks:
     ########################################################################
-    # 1) venv para módulos VMware
+    # 1) Crear venv y configurar Python
     ########################################################################
     - name: Crear venv para módulos VMware (si no existe)
       ansible.builtin.shell: |
@@ -143,7 +141,7 @@
           Faltan parámetros de vCenter.
           Revisa:
             - vcenter_hostname / vcenter_username / vcenter_password
-            - group_vars/all.yml o vault.yml o variables de entorno.
+            - group_vars/all.yml, vault.yml o variables de entorno.
         success_msg: "Parámetros de vCenter OK."
 
     - name: Validar datacenter, datastore, cluster y red
@@ -168,7 +166,7 @@
         success_msg: "Recursos de la VM seed OK."
 
     ########################################################################
-    # 7) Definir nombres/rutas de ISOs
+    # 7) Definir nombres y rutas de ISOs
     ########################################################################
     - name: Definir nombres de ISOs
       ansible.builtin.set_fact:
@@ -184,9 +182,9 @@
           seed_iso_filename: "{{ seed_iso_filename }}"
 
     ########################################################################
-    # 8) DEBUG parámetros efectivos para vmware_guest
+    # 8) DEBUG payload para vmware_guest
     ########################################################################
-    - name: DEBUG parámetros vmware_guest
+    - name: DEBUG parámetros vmware_guest (payload limpio)
       ansible.builtin.debug:
         msg:
           hostname: "{{ _vc_effective.hostname }}"
@@ -204,39 +202,46 @@
           network: "{{ _vc_effective.network }}"
           ubuntu_iso: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
           seed_iso: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
-          have_password: "{{ 'YES' if (_vc_effective.password | length > 0) else 'NO' }}"
+          validate_certs: "{{ _vc_effective.validate_certs }}"
 
     ########################################################################
-    # 9) Crear VM base con vmware_guest
+    # 9) Crear VM base con vmware_guest (llamada explícita)
     ########################################################################
     - name: Crear VM base para autoinstall
-      become: false          # usar venv del usuario ansible
+      become: false
       delegate_to: localhost
       community.vmware.vmware_guest:
         hostname: "{{ _vc_effective.hostname }}"
         username: "{{ _vc_effective.username }}"
         password: "{{ _vc_effective.password }}"
-        port: "{{ vcenter_port_eff }}"
-        validate_certs: false
+        port: "{{ vcenter_port_eff | int }}"
+        validate_certs: "{{ _vc_effective.validate_certs | bool }}"
+
         datacenter: "{{ _vc_effective.datacenter }}"
         cluster: "{{ _vc_effective.cluster }}"
         datastore: "{{ _vc_effective.datastore }}"
         folder: "/{{ _vc_effective.datacenter }}/vm"
+
         name: "{{ seed_vm_name }}"
         state: present
         guest_id: ubuntu64Guest
+
         hardware:
-          num_cpus: "{{ seed_vm_num_cpus_eff }}"
-          memory_mb: "{{ seed_vm_memory_mb_eff }}"
+          num_cpus: "{{ seed_vm_num_cpus_eff | int }}"
+          memory_mb: "{{ seed_vm_memory_mb_eff | int }}"
+
         disk:
-          - size_gb: "{{ seed_vm_disk_gb_eff }}"
+          - size_gb: "{{ seed_vm_disk_gb_eff | int }}"
             type: thin
+
         networks:
           - name: "{{ _vc_effective.network }}"
+
         cdrom:
           - type: iso
             iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
           - type: iso
             iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
+
         wait_for_ip_address: false
         state_change_timeout: 600
