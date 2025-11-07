@@ -4,7 +4,7 @@
   gather_facts: false
 
   vars:
-    # Nombre de la VM seed (desde group_vars/all.yml o default)
+    # Nombre de la VM seed (desde group_vars/all.yml)
     vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
 
     # Carpeta lógica en vCenter (opcional)
@@ -23,6 +23,11 @@
 
     # Nombre del seed ISO generado por 00-build-template.yml
     seed_iso_filename: "seed-ubuntu-seed-24-04.iso"
+
+    # Recursos de la VM (puedes ajustarlos en group_vars/all.yml si quieres)
+    seed_vm_num_cpus: "{{ seed_vm_num_cpus | default(2) }}"
+    seed_vm_memory_mb: "{{ seed_vm_memory_mb | default(4096) }}"
+    seed_vm_disk_gb: "{{ seed_vm_disk_gb | default(40) }}"
 
   pre_tasks:
     ########################################################################
@@ -181,7 +186,6 @@
         username: "{{ _vc_effective.username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-        port: 443
 
         name: "{{ vm_name }}"
         state: poweredoff
@@ -195,11 +199,11 @@
         guest_id: "ubuntu64Guest"
 
         hardware:
-          num_cpus: 2
-          memory_mb: 4096
+          num_cpus: "{{ seed_vm_num_cpus | int }}"
+          memory_mb: "{{ seed_vm_memory_mb | int }}"
 
         disk:
-          - size_gb: 40
+          - size_gb: "{{ seed_vm_disk_gb | int }}"
             type: thin
             datastore: "{{ _vc_effective.datastore }}"
 
@@ -209,7 +213,7 @@
             ip: "{{ guest_ip }}"
             netmask: "{{ guest_netmask }}"
             gateway: "{{ guest_gateway }}"
-            dns_servers: "{{ guest_dns | default(omit) }}"
+            dns_servers: "{{ guest_dns if (guest_dns | length > 0) else omit }}"
 
         cdrom:
           - type: iso
