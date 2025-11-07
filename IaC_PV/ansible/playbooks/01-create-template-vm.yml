@@ -7,7 +7,7 @@
     # Nombre de la VM "seed"
     seed_vm_name: "ubuntu-seed-24-04"
 
-    # Carpeta de VMs (ajusta según tu inventario; puede ser vacío)
+    # Carpeta de VMs en el inventario (ajusta si quieres otra)
     vm_folder: "PV_IaC"
 
     # Recursos de la VM base
@@ -15,46 +15,43 @@
     seed_vm_memory_mb: 4096
     seed_vm_disk_gb: 40
 
-    # Scope en vCenter (puede venir de group_vars/all.yml)
+    # Scope en vCenter: si no viene de group_vars, toma estos defaults
     vcenter_datacenter: "{{ vcenter_datacenter | default('POPULAR_VALORES') }}"
     vcenter_datastore: "{{ vcenter_datastore | default('PURESTORAGE_PV_X20R4_VOL_1') }}"
     vcenter_cluster: "{{ vcenter_cluster | default('PV-CLUSTER') }}"
     vcenter_network: "{{ vcenter_network | default('VLAN-5') }}"
 
-    # Rutas de ISOs dentro del datastore (deben existir)
+    # Rutas dentro del datastore (deben existir)
     iso_installer_path: "ISOS/ubuntu-24.04.1-live-server-amd64.iso"
     iso_seed_path: "ISOS/seed-ubuntu-seed-24-04.iso"
 
   pre_tasks:
     ####################################################################
-    # 1) Cargar credenciales desde vault si existe
-    #    Intentamos en:
-    #      - ../vault.yml          (raíz del repo, donde tú lo tienes)
-    #      - vault.yml             (por si está junto al playbook)
-    #      - vars/env/vault.yml    (estructura alternativa)
+    # 1) Cargar credenciales desde vault.yml en la raíz del repo
+    #    Ruta absoluta efectiva:
+    #      /home/ansible/infra_pv/IaC_PV/IaC_PV/ansible/vault.yml
+    #    Desde este playbook (en playbooks/): ../vault.yml
     ####################################################################
-    - name: Cargar credenciales de vCenter desde vault (si existe)
+    - name: Cargar credenciales de vCenter desde ../vault.yml (si existe)
       ansible.builtin.include_vars:
-        file: "{{ item }}"
-      loop:
-        - "../vault.yml"
-        - "vault.yml"
-        - "vars/env/vault.yml"
+        file: "../vault.yml"
+      register: _vault_load
       ignore_errors: true
       failed_when: false
       run_once: true
 
     ####################################################################
-    # 2) Resolver endpoint/credenciales desde entorno, group_vars y vault
-    #    Prioridad:
-    #      1) VCENTER_* del entorno
-    #      2) vcenter_* ya definidos (group_vars / vault)
+    # 2) Resolver endpoint/credenciales combinando:
+    #      - variables de entorno VCENTER_*
+    #      - vars ya definidas (group_vars/all.yml)
+    #      - contenido de vault.yml (vcenter_*)
     ####################################################################
     - name: Resolver endpoint/credenciales desde entorno, group_vars y vault
       ansible.builtin.set_fact:
         vcenter_hostname: >-
           {{
             (lookup('env', 'VCENTER_HOSTNAME') | default('', true))
+            or (vcenter_hostname | default('', true))
             or (vcenter_hostname | default('', true))
           }}
         vcenter_username: >-
@@ -92,9 +89,12 @@
           - (vcenter_password | default('')) | length > 0
         fail_msg: |
           Faltan parámetros de vCenter. hostname='{{ vcenter_hostname | default('') }}' username='{{ vcenter_username | default('') }}'.
-          Define en:
-            - group_vars/all.yml (vcenter_*)
-            - o ../vault.yml / vault.yml / vars/env/vault.yml (vcenter_*)
+          Define alguno de estos:
+            - vault.yml en la raíz del repo con:
+                vcenter_hostname: 192.168.5.150
+                vcenter_username: ansible_svc@vsphere.local
+                vcenter_password: <clave>
+            - o group_vars/all.yml con vcenter_*
             - o variables de entorno VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD.
         success_msg: "Parámetros de vCenter OK."
       run_once: true
