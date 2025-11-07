@@ -181,6 +181,7 @@
         username: "{{ _vc_effective.username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        port: 443
 
         name: "{{ vm_name }}"
         state: poweredoff
@@ -191,13 +192,7 @@
         datastore: "{{ _vc_effective.datastore }}"
         folder: "{{ vm_folder | default(omit) }}"
 
-        # *** Clave para tu error actual ***
         guest_id: "ubuntu64Guest"
-
-        hardware:
-          num_cpus: 2
-          memory_mb: 4096
-          scsi: paravirtual
 
         disk:
           - size_gb: 40
