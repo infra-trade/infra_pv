@@ -4,13 +4,13 @@
   gather_facts: false
 
   vars:
-    # Nombre de la VM seed (desde group_vars/all.yml)
+    # Nombre de la VM seed
     vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
 
     # Carpeta dentro del datastore donde están los ISOs
     datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
-    # Nombre del ISO de Ubuntu (si no viene por URL, usamos default)
+    # Nombre del ISO de Ubuntu (si usaste 00, ya está subido con este nombre)
     ubuntu_iso_filename: >-
       {{
         (ubuntu_iso_url | default('') | basename)
@@ -23,7 +23,7 @@
 
   pre_tasks:
     ########################################################################
-    # 1) Preparar venv para módulos VMware
+    # 1) venv para VMware
     ########################################################################
     - name: Crear venv para módulos VMware (si no existe)
       ansible.builtin.shell: |
@@ -127,27 +127,27 @@
         var: _vc_effective
 
     ########################################################################
-    # 5) Normalizar y validar recursos VM seed
+    # 5) Normalizar y validar recursos VM seed (usar *_eff para evitar loops)
     ########################################################################
     - name: Normalizar recursos de la VM seed
       ansible.builtin.set_fact:
-        seed_vm_num_cpus: "{{ (seed_vm_num_cpus | default(2)) | int }}"
-        seed_vm_memory_mb: "{{ (seed_vm_memory_mb | default(4096)) | int }}"
-        seed_vm_disk_gb: "{{ (seed_vm_disk_gb | default(40)) | int }}"
+        seed_vm_num_cpus_eff: "{{ (seed_vm_num_cpus | default(2)) | int }}"
+        seed_vm_memory_mb_eff: "{{ (seed_vm_memory_mb | default(4096)) | int }}"
+        seed_vm_disk_gb_eff: "{{ (seed_vm_disk_gb | default(40)) | int }}"
 
     - name: Debug recursos de la VM seed
       ansible.builtin.debug:
         msg:
-          num_cpus: "{{ seed_vm_num_cpus }}"
-          memory_mb: "{{ seed_vm_memory_mb }}"
-          disk_gb: "{{ seed_vm_disk_gb }}"
+          num_cpus: "{{ seed_vm_num_cpus_eff }}"
+          memory_mb: "{{ seed_vm_memory_mb_eff }}"
+          disk_gb: "{{ seed_vm_disk_gb_eff }}"
 
     - name: Validar recursos de la VM seed
       ansible.builtin.assert:
         that:
-          - seed_vm_num_cpus > 0
-          - seed_vm_memory_mb > 0
-          - seed_vm_disk_gb > 0
+          - seed_vm_num_cpus_eff > 0
+          - seed_vm_memory_mb_eff > 0
+          - seed_vm_disk_gb_eff > 0
         success_msg: "Recursos de la VM seed OK."
 
     - name: Validar credenciales y endpoint de vCenter
@@ -169,7 +169,7 @@
 
   tasks:
     ########################################################################
-    # 6) Crear VM base con installer ISO + seed ISO (llamada explícita)
+    # 6) Crear VM base con installer ISO + seed ISO
     ########################################################################
     - name: Crear VM base para autoinstall
       community.vmware.vmware_guest:
@@ -189,11 +189,11 @@
         guest_id: "ubuntu64Guest"
 
         hardware:
-          num_cpus: "{{ seed_vm_num_cpus }}"
-          memory_mb: "{{ seed_vm_memory_mb }}"
+          num_cpus: "{{ seed_vm_num_cpus_eff }}"
+          memory_mb: "{{ seed_vm_memory_mb_eff }}"
 
         disk:
-          - size_gb: "{{ seed_vm_disk_gb }}"
+          - size_gb: "{{ seed_vm_disk_gb_eff }}"
             type: thin
 
         networks:
