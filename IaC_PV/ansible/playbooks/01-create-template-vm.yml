@@ -26,7 +26,7 @@
 
   pre_tasks:
     ########################################################################
-    # 1) Preparar venv para módulos VMware (igual que en 00-build-template)
+    # 1) Preparar venv para módulos VMware
     ########################################################################
     - name: Crear venv para módulos VMware (si no existe)
       ansible.builtin.shell: |
@@ -193,6 +193,10 @@
         folder: "{{ vm_folder | default(omit) }}"
 
         guest_id: "ubuntu64Guest"
+
+        hardware:
+          num_cpus: 2
+          memory_mb: 4096
 
         disk:
           - size_gb: 40
