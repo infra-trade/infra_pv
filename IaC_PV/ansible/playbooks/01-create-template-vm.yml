@@ -4,10 +4,10 @@
   gather_facts: false
 
   vars:
-    # Nombre de la VM "seed" que se va a crear para hacer el autoinstall
+    # Nombre de la VM "seed"
     seed_vm_name: "ubuntu-seed-24-04"
 
-    # Opcional: carpeta de VMs en el vCenter (ajusta según tu estructura)
+    # Carpeta de VMs (ajusta según tu inventario; puede ser vacío)
     vm_folder: "PV_IaC"
 
     # Recursos de la VM base
@@ -15,8 +15,7 @@
     seed_vm_memory_mb: 4096
     seed_vm_disk_gb: 40
 
-    # Datacenter / Datastore / Red / Cluster
-    # Se pueden definir en group_vars/all.yml, vault.yml o por -e
+    # Scope en vCenter (puede venir de group_vars/all.yml)
     vcenter_datacenter: "{{ vcenter_datacenter | default('POPULAR_VALORES') }}"
     vcenter_datastore: "{{ vcenter_datastore | default('PURESTORAGE_PV_X20R4_VOL_1') }}"
     vcenter_cluster: "{{ vcenter_cluster | default('PV-CLUSTER') }}"
@@ -29,21 +28,27 @@
   pre_tasks:
     ####################################################################
     # 1) Cargar credenciales desde vault si existe
+    #    Intentamos en:
+    #      - ../vault.yml          (raíz del repo, donde tú lo tienes)
+    #      - vault.yml             (por si está junto al playbook)
+    #      - vars/env/vault.yml    (estructura alternativa)
     ####################################################################
     - name: Cargar credenciales de vCenter desde vault (si existe)
       ansible.builtin.include_vars:
         file: "{{ item }}"
-      with_first_found:
-        - "vars/env/vault.yml"
+      loop:
+        - "../vault.yml"
         - "vault.yml"
+        - "vars/env/vault.yml"
       ignore_errors: true
+      failed_when: false
       run_once: true
 
     ####################################################################
     # 2) Resolver endpoint/credenciales desde entorno, group_vars y vault
-    #    Orden de precedencia:
-    #    - Variables de entorno VCENTER_*
-    #    - vcenter_* ya definidos (group_vars/all.yml, -e, vault.yml)
+    #    Prioridad:
+    #      1) VCENTER_* del entorno
+    #      2) vcenter_* ya definidos (group_vars / vault)
     ####################################################################
     - name: Resolver endpoint/credenciales desde entorno, group_vars y vault
       ansible.builtin.set_fact:
@@ -89,7 +94,7 @@
           Faltan parámetros de vCenter. hostname='{{ vcenter_hostname | default('') }}' username='{{ vcenter_username | default('') }}'.
           Define en:
             - group_vars/all.yml (vcenter_*)
-            - o vault.yml / vars/env/vault.yml (vcenter_*)
+            - o ../vault.yml / vault.yml / vars/env/vault.yml (vcenter_*)
             - o variables de entorno VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD.
         success_msg: "Parámetros de vCenter OK."
       run_once: true
@@ -126,15 +131,11 @@
 
         networks:
           - name: "{{ vcenter_network }}"
-            type: static
-            # El seed suele obtener IP por DHCP durante instalación;
-            # si quieres IP fija aquí, podrías añadir ip / netmask / gateway.
+            type: vmxnet3
 
         cdrom:
-          # ISO instalador Ubuntu
           - type: iso
             iso_path: "{{ vcenter_datacenter }}/datastore/{{ vcenter_datastore }}/{{ iso_installer_path }}"
-          # Seed ISO con cloud-init (NoCloud)
           - type: iso
             iso_path: "{{ vcenter_datacenter }}/datastore/{{ vcenter_datastore }}/{{ iso_seed_path }}"
       delegate_to: localhost
