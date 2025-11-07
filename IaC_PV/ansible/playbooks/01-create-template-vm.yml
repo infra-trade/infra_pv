@@ -96,6 +96,11 @@
             or ((vault_vars | default({})).vault_vcenter_password | default('', true))
             or (vcenter_password | default('', true))
           }}
+        # Puerto explícito para evitar el bug de int(None)
+        vcenter_port: >-
+          {{
+            (lookup('env','VCENTER_PORT') | default(443, true)) | int
+          }}
         vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
         vcenter_datastore: "{{ vcenter_datastore | default('') }}"
         vcenter_cluster: "{{ vcenter_cluster | default('') }}"
@@ -112,6 +117,7 @@
           datastore: "{{ vcenter_datastore | default('') }}"
           cluster: "{{ vcenter_cluster | default('') }}"
           network: "{{ vcenter_network | default('') }}"
+          port: "{{ vcenter_port | int }}"
           password_from_vault: >-
             {{
               'YES'
@@ -127,7 +133,7 @@
         var: _vc_effective
 
     ########################################################################
-    # 5) Normalizar y validar recursos VM seed (usar *_eff para evitar loops)
+    # 5) Normalizar y validar recursos VM seed
     ########################################################################
     - name: Normalizar recursos de la VM seed
       ansible.builtin.set_fact:
@@ -177,6 +183,7 @@
         username: "{{ _vc_effective.username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs }}"
+        port: "{{ _vc_effective.port }}"
 
         datacenter: "{{ _vc_effective.datacenter }}"
         cluster: "{{ _vc_effective.cluster }}"
