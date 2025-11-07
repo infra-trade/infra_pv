@@ -196,7 +196,7 @@
           cluster: "{{ _vc_effective.cluster }}"
           datastore: "{{ _vc_effective.datastore }}"
 
-          # Folder requerido por tu versión del módulo
+          # Folder requerido (ruta absoluta bajo el DC)
           folder: "/{{ _vc_effective.datacenter }}/vm"
 
           name: "{{ vm_name }}"
