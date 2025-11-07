@@ -4,7 +4,7 @@
   gather_facts: false
 
   vars:
-    # Ruta del venv donde se instalan pyvmomi/requests
+    # Ruta del venv para módulos VMware
     venv_path: "{{ ansible_env.HOME | default('~') }}/.ansible/venvs/vmware"
 
     # Defaults de recursos de la VM seed
@@ -51,17 +51,15 @@
       when: all_stat.stat.exists
 
     ########################################################################
-    # 3) Cargar vault.yml (solo credenciales)
+    # 3) Cargar vault.yml (solo credenciales vCenter) si existe
     ########################################################################
 
     - name: Verificar existencia de vault.yml en la raíz del repo
-      become: false
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../vault.yml"
       register: vault_stat
 
     - name: Cargar credenciales de vCenter desde vault.yml (si existe)
-      become: false
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../vault.yml"
       when: vault_stat.stat.exists
@@ -83,12 +81,12 @@
           {{ lookup('env', 'VCENTER_PASSWORD')
              or (vcenter_password | default('')) }}
         vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
-        vcenter_datastore: "{{ vcenter_datastore | default('')) }}"
+        vcenter_datastore: "{{ vcenter_datastore | default('') }}"
         vcenter_cluster: "{{ vcenter_cluster | default('') }}"
         vcenter_network: "{{ vcenter_network | default('') }}"
         datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
         vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-        vcenter_port: "{{ (vcenter_port | default(443, true)) | int }}"
+        vcenter_port: "{{ (vcenter_port | default(443)) | int }}"
 
     - name: Consolidar parámetros efectivos de vCenter y scope
       ansible.builtin.set_fact:
@@ -128,7 +126,7 @@
           disk_gb: "{{ seed_vm_disk_gb_eff }}"
 
     ########################################################################
-    # 6) Validaciones (antes de pegarle a vCenter)
+    # 6) Validaciones previas
     ########################################################################
 
     - name: Validar credenciales y endpoint de vCenter
@@ -179,7 +177,7 @@
           seed_iso_filename: "{{ seed_iso_filename }}"
 
     ########################################################################
-    # 8) DEBUG parámetros finales para vmware_guest
+    # 8) DEBUG parámetros para vmware_guest
     ########################################################################
 
     - name: DEBUG parámetros vmware_guest
@@ -200,7 +198,7 @@
 
   tasks:
     ########################################################################
-    # 9) Crear VM base con vmware_guest (llamada limpia, sin dict templated)
+    # 9) Crear VM base con vmware_guest
     ########################################################################
 
     - name: Crear VM base para autoinstall
