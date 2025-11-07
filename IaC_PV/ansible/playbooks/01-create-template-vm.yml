@@ -8,21 +8,19 @@
     - ansible.builtin
 
   vars:
-    # Valores por defecto de la VM seed (se pueden sobreescribir en group_vars/all.yml)
+    # Valores por defecto de la VM seed (se pueden sobrescribir en group_vars/all.yml)
     seed_vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
     seed_vm_num_cpus_default: 2
     seed_vm_memory_mb_default: 4096
     seed_vm_disk_gb_default: 40
 
-    # Directorio de ISOs en el datastore (por defecto ISOS)
+    # Directorio de ISOs en el datastore
     datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
   pre_tasks:
-
     ########################################################################
     # 1) Crear venv para módulos VMware (si no existe)
     ########################################################################
-
     - name: Crear venv para módulos VMware (si no existe)
       become: true
       ansible.builtin.shell: |
@@ -45,7 +43,6 @@
     ########################################################################
     # 2) Cargar group_vars/all.yml (si existe)
     ########################################################################
-
     - name: Verificar existencia de group_vars/all.yml
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../group_vars/all.yml"
@@ -59,7 +56,6 @@
     ########################################################################
     # 3) Cargar vault.yml (si existe)
     ########################################################################
-
     - name: Verificar existencia de vault.yml en la raíz del repo
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../vault.yml"
@@ -74,7 +70,6 @@
     ########################################################################
     # 4) Resolver endpoint/credenciales desde entorno, vault y group_vars
     ########################################################################
-
     - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
       ansible.builtin.set_fact:
         vcenter_hostname: >-
@@ -111,7 +106,6 @@
     ########################################################################
     # 5) Consolidar parámetros efectivos de vCenter y scope
     ########################################################################
-
     - name: Consolidar parámetros efectivos de vCenter y scope
       ansible.builtin.set_fact:
         _vc_effective:
@@ -136,7 +130,6 @@
     ########################################################################
     # 6) Normalizar recursos de la VM seed
     ########################################################################
-
     - name: Normalizar recursos de la VM seed
       ansible.builtin.set_fact:
         seed_vm_num_cpus_eff: >-
@@ -159,11 +152,9 @@
           }}
 
   tasks:
-
     ########################################################################
-    # 7) Validaciones básicas
+    # 7) Debug + Validaciones
     ########################################################################
-
     - name: Debug recursos de la VM seed
       ansible.builtin.debug:
         msg:
@@ -210,19 +201,12 @@
         success_msg: "Scope de vCenter (DC/DS/Cluster/Network) OK."
 
     ########################################################################
-    # 8) Definir nombres de ISOs (sin operadores raros)
+    # 8) Definir nombres de ISOs (simplificado, sin '>')
     ########################################################################
-
     - name: Definir nombres de ISOs
       ansible.builtin.set_fact:
         ubuntu_iso_filename: >-
-          {{
-            (ubuntu_iso_url | default('') | string | length) > 0
-            | ternary(
-                (ubuntu_iso_url | basename),
-                'ubuntu-24.04.1-live-server-amd64.iso'
-              )
-          }}
+          {{ (ubuntu_iso_url | default('https://releases.ubuntu.com/24.04/ubuntu-24.04.1-live-server-amd64.iso')) | basename }}
         seed_iso_filename: "seed-{{ seed_vm_name }}.iso"
 
     - name: DEBUG nombres de ISOs
@@ -232,17 +216,18 @@
           seed_iso_filename: "{{ seed_iso_filename }}"
 
     ########################################################################
-    # 9) Construir parámetros vmware_guest (tipados y sin None)
+    # 9) Construir parámetros vmware_guest (tipados, sin None)
     ########################################################################
-
     - name: Construir parámetros para vmware_guest
       ansible.builtin.set_fact:
         vmware_guest_params:
           hostname: "{{ _vc_effective.hostname }}"
           username: "{{ _vc_effective.username }}"
           password: "{{ vcenter_password }}"
-          validate_certs: "{{ vcenter_validate_certs | bool }}"
+          validate_certs: "{{ (vcenter_validate_certs | default(false)) | bool }}"
+          port: "{{ vcenter_port | int }}"
           datacenter: "{{ _vc_effective.datacenter }}"
+          folder: "/{{ _vc_effective.datacenter }}/vm"
           cluster: "{{ _vc_effective.cluster }}"
           datastore: "{{ _vc_effective.datastore }}"
           name: "{{ seed_vm_name }}"
@@ -269,7 +254,6 @@
     ########################################################################
     # 10) Crear VM base con vmware_guest
     ########################################################################
-
     - name: Crear VM base para autoinstall
       community.vmware.vmware_guest: "{{ vmware_guest_params }}"
       delegate_to: localhost
