@@ -1,0 +1,183 @@
+---
+- name: Convertir VM seed Ubuntu 24.04 en template
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    # Mismo venv usado en 00 y 01
+    vmware_venv_path: "{{ lookup('env', 'VMWARE_VENV') | default('~/.ansible/venvs/vmware', true) }}"
+
+    # Nombre de la VM seed creada en 01 (puedes sobreescribir via -e seed_vm_name=...)
+    seed_vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
+
+    # Validación de certificados (ajusta si tu vCenter tiene CA válida)
+    vcenter_validate_certs: false
+
+  pre_tasks:
+    ########################################################################
+    # 1) Preparar entorno Python (venv + dependencias VMware)
+    ########################################################################
+
+    - name: Crear venv para módulos VMware (si no existe)
+      ansible.builtin.command:
+        cmd: "python3 -m venv {{ vmware_venv_path }}"
+        creates: "{{ vmware_venv_path }}/bin/python"
+      changed_when: false
+
+    - name: Instalar dependencias de VMware en el venv
+      ansible.builtin.command:
+        cmd: "{{ vmware_venv_path }}/bin/pip install --upgrade pip pyvmomi requests"
+      changed_when: false
+
+    - name: Usar el Python del venv para este play
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ vmware_venv_path }}/bin/python"
+
+    ########################################################################
+    # 2) Cargar credenciales desde vault.yml (opcional)
+    ########################################################################
+
+    - name: Cargar credenciales de vCenter desde vault.yml (si existe)
+      no_log: true
+      ansible.builtin.include_vars:
+        file: vault.yml
+      ignore_errors: true
+      when: lookup('ansible.builtin.file', 'vault.yml', errors='ignore') != ''
+
+    ########################################################################
+    # 3) Resolver parámetros efectivos de vCenter
+    #    (env > group_vars/all.yml > vault.yml)
+    ########################################################################
+
+    - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
+      ansible.builtin.set_fact:
+        vcenter_hostname: >-
+          {{ (lookup('env', 'VCENTER_HOSTNAME') | default('', true))
+             or (vcenter_hostname | default('', true))
+             or (vcenter_hostname | default('', true)) }}
+        vcenter_username: >-
+          {{ (lookup('env', 'VCENTER_USERNAME') | default('', true))
+             or (vcenter_username | default('', true))
+             or (vault_vcenter_username | default('', true)) }}
+        vcenter_password: >-
+          {{ (lookup('env', 'VCENTER_PASSWORD') | default('', true))
+             or (vcenter_password | default('', true))
+             or (vault_vcenter_password | default('', true)) }}
+
+    - name: Consolidar parámetros efectivos de vCenter y scope
+      ansible.builtin.set_fact:
+        _vc_effective:
+          hostname: "{{ vcenter_hostname | default('') }}"
+          username: "{{ vcenter_username | default('') }}"
+          password_from_vault: >-
+            {{ 'YES' if (vault_vcenter_password | default('') | length > 0) else 'NO' }}
+          datacenter: "{{ vcenter_datacenter | default('') }}"
+          datastore: "{{ vcenter_datastore | default('') }}"
+
+    - name: Mostrar parámetros efectivos de vCenter (debug)
+      ansible.builtin.debug:
+        var: _vc_effective
+
+    - name: Validar credenciales y endpoint de vCenter
+      ansible.builtin.assert:
+        that:
+          - (_vc_effective.hostname | length) > 0
+          - (_vc_effective.username | length) > 0
+          - (vcenter_password | default('') | length) > 0
+        fail_msg: |
+          Faltan parámetros de vCenter.
+          Define en:
+            - group_vars/all.yml (vcenter_hostname, vcenter_username, vcenter_datacenter, vcenter_datastore, etc.)
+            - o vault.yml (vault_vcenter_username, vault_vcenter_password, y opcionalmente vcenter_hostname)
+            - o variables de entorno VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD.
+
+    - name: Validar datacenter y datastore
+      ansible.builtin.assert:
+        that:
+          - (vcenter_datacenter | default('') | length) > 0
+          - (vcenter_datastore | default('') | length) > 0
+        fail_msg: |
+          Faltan 'vcenter_datacenter' o 'vcenter_datastore'.
+          Revísalos en group_vars/all.yml o como extra vars.
+
+  tasks:
+    ########################################################################
+    # 4) Obtener info de la VM seed
+    ########################################################################
+
+    - name: Obtener info de la VM seed
+      community.vmware.vmware_guest_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ seed_vm_name }}"
+      register: seed_info
+
+    - name: Validar que la VM seed existe
+      ansible.builtin.assert:
+        that:
+          - seed_info.instance is defined
+        fail_msg: "La VM '{{ seed_vm_name }}' no existe en el datacenter '{{ vcenter_datacenter }}'. Ejecuta antes el playbook 01-create-template-vm.yml."
+
+    - name: Mostrar estado actual de la VM seed
+      ansible.builtin.debug:
+        msg:
+          name: "{{ seed_vm_name }}"
+          power_state: "{{ seed_info.instance.runtime.powerState }}"
+          is_template: "{{ seed_info.instance.config.template | default(false) }}"
+
+    ########################################################################
+    # 5) Apagar VM seed si está encendida
+    ########################################################################
+
+    - name: Apagar VM seed si está encendida
+      when: seed_info.instance.runtime.powerState != 'poweredOff'
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ seed_vm_name }}"
+        state: poweredoff
+
+    ########################################################################
+    # 6) (Opcional) Desmontar ISOs antes de templar
+    ########################################################################
+
+    - name: Desmontar CD/DVDs de la VM seed (opcional)
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ seed_vm_name }}"
+        state: present
+        cdrom:
+          - type: none
+          - type: none
+      ignore_errors: true
+
+    ########################################################################
+    # 7) Convertir VM en template
+    ########################################################################
+
+    - name: Convertir VM seed en template
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ seed_vm_name }}"
+        state: present
+        is_template: true
+      register: convert_result
+
+    - name: Confirmar template creado
+      ansible.builtin.debug:
+        msg: "VM '{{ seed_vm_name }}' convertida a template correctamente en '{{ vcenter_datacenter }}'."
