@@ -5,18 +5,20 @@
   gather_facts: false
 
   vars:
-    # Mismo venv que usamos en 00
-    vmware_venv_path: "{{ lookup('env', 'VMWARE_VENV') | default('~/.ansible/venvs/vmware', true) }}"
+    # Directorio HOME y venv VMware con ruta absoluta
+    home_dir: "{{ lookup('env', 'HOME') }}"
+    vmware_venv_path: "{{ lookup('env', 'VMWARE_VENV') | default(home_dir + '/.ansible/venvs/vmware', true) }}"
 
     # Nombre de la VM seed
     seed_vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
 
-    # Template resultante (no se usa aún, pero queda previsto)
+    # Nombre de template final (reservado para pasos siguientes)
     template_name: "{{ template_name | default('ubuntu-24-04-template') }}"
 
+    # Validación de certificados vCenter
     vcenter_validate_certs: false
 
-    # Directorio en el datastore donde ya está el ISO de Ubuntu y el seed ISO
+    # Carpeta en datastore donde están los ISOs
     datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
 
   pre_tasks:
@@ -41,27 +43,21 @@
 
     ########################################################################
     # 2) Cargar vault.yml si existe
-    #    (soporta vault en raíz del repo: ../vault.yml)
+    #    Se asume vault.yml en la raíz del repo Ansible:
+    #    /home/ansible/infra_pv/IaC_PV/IaC_PV/ansible/vault.yml
     ########################################################################
 
-    - name: Comprobar si existe ../vault.yml
+    - name: Verificar existencia de vault.yml en la raíz del repo
       ansible.builtin.stat:
-        path: "../vault.yml"
-      register: vault_parent
-
-    - name: Comprobar si existe vault.yml junto al playbook
-      ansible.builtin.stat:
-        path: "vault.yml"
-      register: vault_local
-      when: not vault_parent.stat.exists
+        path: "{{ playbook_dir }}/../vault.yml"
+      register: vault_root_stat
 
     - name: Cargar credenciales de vCenter desde vault.yml (si existe)
       no_log: true
       ansible.builtin.include_vars:
-        file: >-
-          {{ '../vault.yml' if vault_parent.stat.exists else 'vault.yml' }}
-      when: vault_parent.stat.exists or vault_local is defined and vault_local.stat.exists
-      register: _vault_loaded
+        file: "{{ playbook_dir }}/../vault.yml"
+        name: vault_vcenter
+      when: vault_root_stat.stat.exists
       ignore_errors: true
 
     ########################################################################
@@ -78,20 +74,19 @@
           {{
             (lookup('env', 'VCENTER_HOSTNAME') | default('', true))
             or (vcenter_hostname | default('', true))
-            or (vault_vcenter_hostname | default('', true))
-            or (vcenter_hostname | default('', true))
+            or (vault_vcenter.vcenter_hostname | default('', true))
           }}
         vcenter_username: >-
           {{
             (lookup('env', 'VCENTER_USERNAME') | default('', true))
             or (vcenter_username | default('', true))
-            or (vault_vcenter_username | default('', true))
+            or (vault_vcenter.vault_vcenter_username | default('', true))
           }}
         vcenter_password: >-
           {{
             (lookup('env', 'VCENTER_PASSWORD') | default('', true))
             or (vcenter_password | default('', true))
-            or (vault_vcenter_password | default('', true))
+            or (vault_vcenter.vault_vcenter_password | default('', true))
           }}
 
     - name: Consolidar parámetros efectivos de vCenter y scope
@@ -100,7 +95,7 @@
           hostname: "{{ vcenter_hostname | default('') }}"
           username: "{{ vcenter_username | default('') }}"
           password_from_vault: >-
-            {{ 'YES' if (vault_vcenter_password | default('') | length > 0) else 'NO' }}
+            {{ 'YES' if (vault_vcenter.vault_vcenter_password | default('') | length > 0) else 'NO' }}
           datacenter: "{{ vcenter_datacenter | default('') }}"
           datastore: "{{ vcenter_datastore | default('') }}"
           cluster: "{{ vcenter_cluster | default('') }}"
