@@ -18,7 +18,7 @@
         else 'ubuntu-24.04.1-live-server-amd64.iso'
       }}
 
-    # Nombre del seed ISO generado por 00-build-template.yml
+    # ISO seed generado por 00-build-template.yml
     seed_iso_filename: "seed-ubuntu-seed-24-04.iso"
 
   pre_tasks:
@@ -220,11 +220,11 @@
         guest_id: "ubuntu64Guest"
 
         hardware:
-          num_cpus: "{{ seed_vm_num_cpus }}"
-          memory_mb: "{{ seed_vm_memory_mb }}"
+          num_cpus: "{{ seed_vm_num_cpus | int }}"
+          memory_mb: "{{ seed_vm_memory_mb | int }}"
 
         disk:
-          - size_gb: "{{ seed_vm_disk_gb }}"
+          - size_gb: "{{ seed_vm_disk_gb | int }}"
             type: thin
 
         networks:
@@ -237,7 +237,5 @@
             iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
 
         wait_for_ip_address: false
-        state_change_timeout: 600
-        wait_for_ip_address_timeout: 600
 
       delegate_to: localhost
