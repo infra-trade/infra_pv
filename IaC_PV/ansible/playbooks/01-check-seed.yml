@@ -1,0 +1,63 @@
+---
+- name: Verificar estado de la VM seed ubuntu-seed-24-04
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    venv_path: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
+    seed_vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
+
+  pre_tasks:
+    - name: Usar Python del venv (asumimos creado por 01)
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ venv_path }}/bin/python"
+
+    - name: Cargar group_vars/all.yml si existe
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../group_vars/all.yml"
+      register: all_stat
+
+    - name: include all.yml
+      when: all_stat.stat.exists
+      ansible.builtin.include_vars:
+        file: "{{ all_stat.stat.path }}"
+
+    - name: Cargar vault.yml si existe
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../vault.yml"
+      register: vault_stat
+
+    - name: include vault.yml
+      when: vault_stat.stat.exists
+      no_log: true
+      ansible.builtin.include_vars:
+        file: "{{ vault_stat.stat.path }}"
+
+    - name: Resolver parámetros mínimos de vCenter
+      ansible.builtin.set_fact:
+        vcenter_hostname: "{{ vcenter_hostname | default(lookup('env','VCENTER_HOSTNAME'), true) }}"
+        vcenter_username: "{{ vcenter_username | default(lookup('env','VCENTER_USERNAME'), true) }}"
+        vcenter_password: "{{ vcenter_password | default(lookup('env','VCENTER_PASSWORD'), true) }}"
+        vcenter_datacenter: "{{ vcenter_datacenter }}"
+        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+
+  tasks:
+    - name: Obtener info de la VM seed
+      community.vmware.vmware_guest_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ seed_vm_name }}"
+      register: seed_info
+
+    - name: Mostrar resumen del seed
+      ansible.builtin.debug:
+        msg:
+          name: "{{ seed_vm_name }}"
+          exists: "{{ seed_info.instance is defined }}"
+          is_template: "{{ seed_info.instance.hw_is_template | default(false) }}"
+          power_state: "{{ seed_info.instance.hw_power_status | default('unknown') }}"
+          guest_tools_status: "{{ seed_info.instance.guest_tools_status | default('unknown') }}"
+          hw_files: "{{ seed_info.instance.hw_files | default([]) }}"
