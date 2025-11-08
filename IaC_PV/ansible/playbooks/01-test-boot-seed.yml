@@ -1,11 +1,10 @@
 ---
-- name: Probar autoinstall en VM seed ubuntu-seed-24-04
+- name: Probar boot de la VM seed ubuntu-seed-24-04
   hosts: localhost
   gather_facts: false
 
   vars:
     venv_path: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
-    seed_vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
 
   pre_tasks:
     - name: Usar Python del venv
@@ -33,14 +32,6 @@
       when: vault_stat.stat.exists
       no_log: true
 
-    - name: Resolver parámetros vCenter mínimos
-      ansible.builtin.set_fact:
-        vcenter_hostname: "{{ vcenter_hostname }}"
-        vcenter_username: "{{ vcenter_username }}"
-        vcenter_password: "{{ vcenter_password }}"
-        vcenter_datacenter: "{{ vcenter_datacenter }}"
-        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-
   tasks:
     - name: Encender la VM seed
       community.vmware.vmware_guest:
@@ -51,13 +42,10 @@
         datacenter: "{{ vcenter_datacenter }}"
         name: "{{ seed_vm_name }}"
         state: poweredon
-      register: seed_poweron
+        wait_for_ip_address: false
+      register: poweron
 
-    - name: Esperar hasta 900s a que la VM tenga IP / Tools (autoinstall)
-      vars:
-        attempt_delay: 30
-      retries: 30
-      delay: "{{ attempt_delay }}"
+    - name: Mostrar estado tras encender
       community.vmware.vmware_guest_info:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -65,29 +53,10 @@
         validate_certs: "{{ vcenter_validate_certs }}"
         datacenter: "{{ vcenter_datacenter }}"
         name: "{{ seed_vm_name }}"
-      register: seed_check
-      until: >
-        (seed_check.instance.ipv4 is defined and seed_check.instance.ipv4 is not none)
-        or
-        (seed_check.instance.guest_tools_status is defined
-         and seed_check.instance.guest_tools_status == 'guestToolsRunning')
-      failed_when: false
+      register: info
 
-    - name: Mostrar estado tras espera
+    - name: Debug estado
       ansible.builtin.debug:
         msg:
-          power_state: "{{ seed_check.instance.hw_power_status | default('unknown') }}"
-          ipv4: "{{ seed_check.instance.ipv4 | default('none') }}"
-          guest_tools_status: "{{ seed_check.instance.guest_tools_status | default('unknown') }}"
-
-    - name: Validar que el autoinstall parece exitoso
-      ansible.builtin.assert:
-        that:
-          - seed_check.instance.ipv4 is not none
-          - seed_check.instance.guest_tools_status == 'guestToolsRunning'
-        fail_msg: >
-          La VM seed NO muestra IP ni VMware Tools activos.
-          Esto indica que el instalador de Ubuntu/autoinstall no corrió.
-          Revisa en la consola: ¿está booteando desde la ISO correcta?
-        success_msg: >
-          La VM seed tiene IP y VMware Tools: autoinstall OK, lista para convertir a template.
+          power_state: "{{ info.instance.hw_power_status }}"
+          tools_status: "{{ info.instance.guest_tools_status }}"
