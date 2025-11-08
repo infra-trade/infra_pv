@@ -8,7 +8,7 @@
     # Ruta del venv para módulos VMware
     vmware_venv_path: "{{ lookup('env', 'VMWARE_VENV') | default('/home/ansible/.ansible/venvs/vmware', true) }}"
 
-    # Template base ya creado por 01 + 02
+    # Template base ya creado por 01 + 02 (DEBE tener Ubuntu instalado y booteable)
     template_name: "ubuntu-seed-24-04"
 
     # Carpeta destino dentro del Datacenter
@@ -17,9 +17,9 @@
     # Recursos estándar para todas las VMs infra
     infra_vm_num_cpus: 4
     infra_vm_memory_mb: 24576    # 24 GB
-    infra_vm_disk_gb: 105        # Disco raíz /
+    infra_vm_disk_gb: 105        # tamaño deseado del disco raíz
 
-    # Definición de las VMs a crear (IPs solo como metadata de referencia)
+    # Definición de las VMs a crear (IPs solo como referencia)
     infra_hosts:
       - name: "infra-master"
         ip: "192.168.5.85"
@@ -96,9 +96,11 @@
              | default(vcenter_username | default('', true), true) }}
         vcenter_password: >-
           {{ lookup('env', 'VCENTER_PASSWORD')
-             | default(vcenter_password
-                      | default(vault_vcenter_password | default('', true), true),
-                      true) }}
+             | default(
+                 vcenter_password
+                 | default(vault_vcenter_password | default('', true), true),
+                 true
+               ) }}
         vcenter_datacenter: "{{ vcenter_datacenter | default('', true) }}"
         vcenter_datastore: "{{ vcenter_datastore | default('', true) }}"
         vcenter_cluster: "{{ vcenter_cluster | default('', true) }}"
@@ -148,7 +150,7 @@
 
   tasks:
     ########################################################################
-    # 5) Crear VMs desde template en carpeta PV_IaC (SIN customización guest)
+    # 5) Crear VMs (clone completo del template) en carpeta PV_IaC
     ########################################################################
 
     - name: Debug recursos de VMs infra
@@ -158,10 +160,10 @@
           template: "{{ template_name }}"
           num_cpus: "{{ infra_vm_num_cpus }}"
           memory_mb: "{{ infra_vm_memory_mb }}"
-          disk_gb: "{{ infra_vm_disk_gb }}"
+          target_disk_gb: "{{ infra_vm_disk_gb }}"
           infra_hosts: "{{ infra_hosts }}"
 
-    - name: Crear VMs infra desde template en carpeta PV_IaC
+    - name: Crear VMs infra desde template en carpeta PV_IaC (clone sin customization)
       community.vmware.vmware_guest:
         hostname: "{{ _vc_effective.hostname }}"
         username: "{{ _vc_effective.username }}"
@@ -177,16 +179,34 @@
         hardware:
           memory_mb: "{{ infra_vm_memory_mb }}"
           num_cpus: "{{ infra_vm_num_cpus }}"
-        disk:
-          - size_gb: "{{ infra_vm_disk_gb }}"
-            type: thin
-            datastore: "{{ _vc_effective.datastore }}"
         networks:
           - name: "{{ _vc_effective.network }}"
       loop: "{{ infra_hosts }}"
       loop_control:
         label: "{{ item.name }}"
       register: infra_vms
+
+    ########################################################################
+    # 6) Extender disco de sistema a 105 GB (hipervisor). Dentro del SO
+    #    habrá que crecer partición/FS aparte.
+    ########################################################################
+
+    - name: Extender disco principal a {{ infra_vm_disk_gb }} GB
+      community.vmware.vmware_guest_disk:
+        hostname: "{{ _vc_effective.hostname }}"
+        username: "{{ _vc_effective.username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ _vc_effective.validate_certs }}"
+        datacenter: "{{ _vc_effective.datacenter }}"
+        name: "{{ item.name }}"
+        disk:
+          - state: present
+            scsi_controller: 0
+            unit_number: 0
+            size_gb: "{{ infra_vm_disk_gb }}"
+      loop: "{{ infra_hosts }}"
+      loop_control:
+        label: "{{ item.name }}"
 
     - name: Mostrar resultado de la creación de las VMs infra
       ansible.builtin.debug:
