@@ -163,10 +163,22 @@
 
   tasks:
     ########################################################################
-    # 7) Crear VM seed con ambas ISOs montadas
+    # 7) Limpiar VM previa y crear seed nueva con ISOs
     ########################################################################
 
-    - name: Eliminar VM seed previa (si existe) para empezar limpio (opcional)
+    - name: Apagar VM seed previa si existe
+      community.vmware.vmware_guest:
+        hostname: "{{ _vc_effective.hostname }}"
+        username: "{{ _vc_effective.username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ _vc_effective.datacenter }}"
+        name: "{{ seed_vm_name }}"
+        state: poweredoff
+      failed_when: false
+      ignore_errors: true
+
+    - name: Eliminar VM seed previa si existe
       community.vmware.vmware_guest:
         hostname: "{{ _vc_effective.hostname }}"
         username: "{{ _vc_effective.username }}"
@@ -175,6 +187,8 @@
         datacenter: "{{ _vc_effective.datacenter }}"
         name: "{{ seed_vm_name }}"
         state: absent
+        force: true
+      failed_when: false
       ignore_errors: true
 
     - name: Crear VM base para autoinstall con ISOs
@@ -199,15 +213,21 @@
             datastore: "{{ _vc_effective.datastore }}"
         networks:
           - name: "{{ _vc_effective.network }}"
+            type: dhcp
+            typev6: dhcp
         cdrom:
           - type: iso
-            iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
+            controller_type: ide
             controller_number: 0
             unit_number: 0
+            iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
+            state: present
           - type: iso
-            iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
+            controller_type: ide
             controller_number: 0
             unit_number: 1
+            iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
+            state: present
         wait_for_ip_address: false
 
     - name: Mostrar resumen de la VM seed creada
@@ -220,10 +240,10 @@
         name: "{{ seed_vm_name }}"
       register: seed_info
 
-    - name: Debug estado final
+    - name: Debug estado final de la VM seed
       ansible.builtin.debug:
         msg:
-          name: "{{ seed_info.instance.hw_name }}"
-          power_state: "{{ seed_info.instance.hw_power_status }}"
-          is_template: "{{ seed_info.instance.hw_is_template }}"
-          files: "{{ seed_info.instance.hw_files }}"
+          name: "{{ seed_info.instance.hw_name | default('N/A') }}"
+          power_state: "{{ seed_info.instance.hw_power_status | default('N/A') }}"
+          is_template: "{{ seed_info.instance.hw_is_template | default('N/A') }}"
+          files: "{{ seed_info.instance.hw_files | default([]) }}"
