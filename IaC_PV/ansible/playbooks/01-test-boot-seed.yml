@@ -1,5 +1,5 @@
 ---
-- name: Probar boot de la VM seed ubuntu-seed-24-04
+- name: Probar autoinstall en VM seed ubuntu-seed-24-04
   hosts: localhost
   gather_facts: false
 
@@ -18,9 +18,9 @@
       register: all_stat
 
     - name: include all.yml
-      when: all_stat.stat.exists
       ansible.builtin.include_vars:
-        file: "{{ all_stat.stat.path }}"
+        file: "{{ playbook_dir }}/../group_vars/all.yml"
+      when: all_stat.stat.exists
 
     - name: Cargar vault.yml si existe
       ansible.builtin.stat:
@@ -28,16 +28,16 @@
       register: vault_stat
 
     - name: include vault.yml
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../vault.yml"
       when: vault_stat.stat.exists
       no_log: true
-      ansible.builtin.include_vars:
-        file: "{{ vault_stat.stat.path }}"
 
     - name: Resolver parámetros vCenter mínimos
       ansible.builtin.set_fact:
-        vcenter_hostname: "{{ vcenter_hostname | default(lookup('env','VCENTER_HOSTNAME'), true) }}"
-        vcenter_username: "{{ vcenter_username | default(lookup('env','VCENTER_USERNAME'), true) }}"
-        vcenter_password: "{{ vcenter_password | default(lookup('env','VCENTER_PASSWORD'), true) }}"
+        vcenter_hostname: "{{ vcenter_hostname }}"
+        vcenter_username: "{{ vcenter_username }}"
+        vcenter_password: "{{ vcenter_password }}"
         vcenter_datacenter: "{{ vcenter_datacenter }}"
         vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
 
@@ -51,13 +51,13 @@
         datacenter: "{{ vcenter_datacenter }}"
         name: "{{ seed_vm_name }}"
         state: poweredon
-      register: power_on
+      register: seed_poweron
 
-    - name: Esperar 60s para que el SO arranque
-      ansible.builtin.wait_for:
-        timeout: 60
-
-    - name: Consultar estado de la VM seed
+    - name: Esperar hasta 900s a que la VM tenga IP / Tools (autoinstall)
+      vars:
+        attempt_delay: 30
+      retries: 30
+      delay: "{{ attempt_delay }}"
       community.vmware.vmware_guest_info:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -65,10 +65,29 @@
         validate_certs: "{{ vcenter_validate_certs }}"
         datacenter: "{{ vcenter_datacenter }}"
         name: "{{ seed_vm_name }}"
-      register: seed_info_after
+      register: seed_check
+      until: >
+        (seed_check.instance.ipv4 is defined and seed_check.instance.ipv4 is not none)
+        or
+        (seed_check.instance.guest_tools_status is defined
+         and seed_check.instance.guest_tools_status == 'guestToolsRunning')
+      failed_when: false
 
-    - name: Mostrar estado tras el arranque
+    - name: Mostrar estado tras espera
       ansible.builtin.debug:
         msg:
-          power_state: "{{ seed_info_after.instance.hw_power_status | default('unknown') }}"
-          guest_tools_status: "{{ seed_info_after.instance.guest_tools_status | default('unknown') }}"
+          power_state: "{{ seed_check.instance.hw_power_status | default('unknown') }}"
+          ipv4: "{{ seed_check.instance.ipv4 | default('none') }}"
+          guest_tools_status: "{{ seed_check.instance.guest_tools_status | default('unknown') }}"
+
+    - name: Validar que el autoinstall parece exitoso
+      ansible.builtin.assert:
+        that:
+          - seed_check.instance.ipv4 is not none
+          - seed_check.instance.guest_tools_status == 'guestToolsRunning'
+        fail_msg: >
+          La VM seed NO muestra IP ni VMware Tools activos.
+          Esto indica que el instalador de Ubuntu/autoinstall no corrió.
+          Revisa en la consola: ¿está booteando desde la ISO correcta?
+        success_msg: >
+          La VM seed tiene IP y VMware Tools: autoinstall OK, lista para convertir a template.
