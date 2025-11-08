@@ -19,7 +19,7 @@
     infra_vm_memory_mb: 24576    # 24 GB
     infra_vm_disk_gb: 105        # Disco raíz /
 
-    # Definición de las VMs a crear
+    # Definición de las VMs a crear (IPs solo como metadata de referencia)
     infra_hosts:
       - name: "infra-master"
         ip: "192.168.5.85"
@@ -146,19 +146,9 @@
           Faltan 'vcenter_datacenter', 'vcenter_datastore', 'vcenter_cluster' o 'vcenter_network'.
           Revísalos en group_vars/all.yml o como extra vars.
 
-    - name: Validar parámetros de red para customización
-      ansible.builtin.assert:
-        that:
-          - guest_gateway is defined
-          - guest_netmask is defined
-          - guest_dns is defined
-        fail_msg: |
-          Faltan 'guest_gateway', 'guest_netmask' o 'guest_dns' en group_vars/all.yml.
-          Son necesarios para asignar IP estática a las VMs infra.
-
   tasks:
     ########################################################################
-    # 5) Crear VMs desde template en carpeta PV_IaC
+    # 5) Crear VMs desde template en carpeta PV_IaC (SIN customización guest)
     ########################################################################
 
     - name: Debug recursos de VMs infra
@@ -183,7 +173,7 @@
         template: "{{ template_name }}"
         datastore: "{{ _vc_effective.datastore }}"
         folder: "/{{ _vc_effective.datacenter }}/vm/{{ vm_folder_name }}"
-        state: poweredon
+        state: poweredoff
         hardware:
           memory_mb: "{{ infra_vm_memory_mb }}"
           num_cpus: "{{ infra_vm_num_cpus }}"
@@ -193,11 +183,6 @@
             datastore: "{{ _vc_effective.datastore }}"
         networks:
           - name: "{{ _vc_effective.network }}"
-            type: static
-            ip: "{{ item.ip }}"
-            netmask: "{{ guest_netmask }}"
-            gateway: "{{ guest_gateway }}"
-            dns_servers: "{{ guest_dns }}"
       loop: "{{ infra_hosts }}"
       loop_control:
         label: "{{ item.name }}"
@@ -205,8 +190,4 @@
 
     - name: Mostrar resultado de la creación de las VMs infra
       ansible.builtin.debug:
-        msg: >-
-          Se han creado/verificado las VMs:
-          {{ infra_hosts | map(attribute='name') | join(', ') }}
-          en la carpeta /{{ _vc_effective.datacenter }}/vm/{{ vm_folder_name }},
-          usando el template {{ template_name }}.
+        var: infra_vms
