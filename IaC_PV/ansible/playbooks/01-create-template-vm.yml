@@ -4,8 +4,8 @@
   gather_facts: false
 
   vars:
-    # Ruta del venv para módulos VMware
-    venv_path: "{{ ansible_env.HOME | default('~') }}/.ansible/venvs/vmware"
+    # Ruta del venv para módulos VMware (usa HOME real, sin ~ literal)
+    venv_path: "{{ ansible_env.HOME }}/.ansible/venvs/vmware"
 
     # Defaults de recursos de la VM seed
     seed_vm_num_cpus_default: 2
@@ -210,7 +210,6 @@
         username: "{{ _vc_effective.username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs }}"
-        # port: se omite para usar el default del módulo (443)
         datacenter: "{{ _vc_effective.datacenter }}"
         cluster: "{{ _vc_effective.cluster }}"
         datastore: "{{ _vc_effective.datastore }}"
@@ -229,6 +228,10 @@
         cdrom:
           - type: iso
             iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ ubuntu_iso_filename }}"
+            controller_number: 0
+            unit_number: 0
           - type: iso
             iso_path: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
+            controller_number: 0
+            unit_number: 1
         wait_for_ip_address: false
