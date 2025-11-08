@@ -4,8 +4,8 @@
   gather_facts: false
 
   vars:
-    # Ruta del venv para módulos VMware (usa HOME real, sin ~ literal)
-    venv_path: "{{ ansible_env.HOME }}/.ansible/venvs/vmware"
+    # Ruta del venv para módulos VMware (usar $HOME del entorno, sin depender de ansible_env)
+    venv_path: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
 
     # Defaults de recursos de la VM seed
     seed_vm_num_cpus_default: 2
