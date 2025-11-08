@@ -193,13 +193,11 @@
             datastore: "{{ _vc_effective.datastore }}"
         networks:
           - name: "{{ _vc_effective.network }}"
-        customization:
-          hostname: "{{ item.name }}"
-          dns_servers: "{{ guest_dns }}"
-          nic_settings:
-            - ip: "{{ item.ip }}"
-              subnet_mask: "{{ guest_netmask }}"
-              gateway: "{{ guest_gateway }}"
+            type: static
+            ip: "{{ item.ip }}"
+            netmask: "{{ guest_netmask }}"
+            gateway: "{{ guest_gateway }}"
+            dns_servers: "{{ guest_dns }}"
       loop: "{{ infra_hosts }}"
       loop_control:
         label: "{{ item.name }}"
