@@ -5,10 +5,10 @@
   gather_facts: false
 
   vars:
-    # Ruta del venv para módulos VMware (coherente con 01)
+    # Mismo venv usado en 01-create-template-vm.yml
     vmware_venv_path: "{{ lookup('env', 'HOME') }}/.ansible/venvs/vmware"
 
-    # Nombre de la VM seed creada en 01 (puede sobreescribirse con -e seed_vm_name=...)
+    # Nombre de la VM seed (puede sobreescribirse con -e seed_vm_name=...)
     seed_vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
 
   pre_tasks:
@@ -36,7 +36,7 @@
         ansible_python_interpreter: "{{ vmware_venv_path }}/bin/python"
 
     ########################################################################
-    # 2) Cargar group_vars/all.yml (si existe) para tener vcenter_* por defecto
+    # 2) Cargar group_vars/all.yml (si existe)
     ########################################################################
 
     - name: Verificar existencia de group_vars/all.yml
@@ -50,7 +50,7 @@
       when: all_vars_stat.stat.exists
 
     ########################################################################
-    # 3) Cargar credenciales desde vault.yml (opcional)
+    # 3) Cargar credenciales desde vault.yml (si existe)
     ########################################################################
 
     - name: Verificar existencia de vault.yml en la raíz del repo
@@ -148,15 +148,17 @@
       ansible.builtin.debug:
         msg:
           name: "{{ seed_vm_name }}"
-          power_state: "{{ seed_info.instance.runtime.powerState }}"
-          is_template: "{{ seed_info.instance.config.template | default(false) }}"
+          power_state: "{{ seed_info.instance.hw_power_status | default('unknown') }}"
+          is_template: "{{ seed_info.instance.hw_is_template | default(false) }}"
 
     ########################################################################
     # 6) Apagar VM seed si está encendida
     ########################################################################
 
     - name: Apagar VM seed si está encendida
-      when: seed_info.instance.runtime.powerState != 'poweredOff'
+      when:
+        - seed_info.instance.hw_power_status is defined
+        - seed_info.instance.hw_power_status != 'poweredOff'
       community.vmware.vmware_guest:
         hostname: "{{ _vc_effective.hostname }}"
         username: "{{ _vc_effective.username }}"
