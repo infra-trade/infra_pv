@@ -1,25 +1,11 @@
 ---
 - name: Crear VMs infra desde template ubuntu-seed-24-04 en carpeta PV_IaC
   hosts: localhost
-  connection: local
   gather_facts: false
 
   vars:
-    # Ruta del venv para módulos VMware
-    vmware_venv_path: "{{ lookup('env', 'VMWARE_VENV') | default('/home/ansible/.ansible/venvs/vmware', true) }}"
+    venv_path: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
 
-    # Template base ya creado por 01 + 02 (DEBE tener Ubuntu instalado y booteable)
-    template_name: "ubuntu-seed-24-04"
-
-    # Carpeta destino dentro del Datacenter
-    vm_folder_name: "PV_IaC"
-
-    # Recursos estándar para todas las VMs infra
-    infra_vm_num_cpus: 4
-    infra_vm_memory_mb: 24576    # 24 GB
-    infra_vm_disk_gb: 105        # tamaño deseado del disco raíz
-
-    # Definición de las VMs a crear (IPs solo como referencia)
     infra_hosts:
       - name: "infra-master"
         ip: "192.168.5.85"
@@ -28,186 +14,78 @@
       - name: "infra-nodo2"
         ip: "192.168.5.87"
 
+    infra_num_cpus: 4
+    infra_memory_mb: 24576
+    infra_disk_gb: 105
+    infra_folder: "/POPULAR_VALORES/vm/PV_IaC"
+    infra_template: "ubuntu-seed-24-04"
+
   pre_tasks:
-    ########################################################################
-    # 1) Preparar entorno Python (venv + dependencias VMware)
-    ########################################################################
-
-    - name: Crear venv para módulos VMware (si no existe)
-      become: true
-      ansible.builtin.shell: |
-        set -e
-        VENV="{{ vmware_venv_path }}"
-        if [ ! -x "$VENV/bin/python" ]; then
-          mkdir -p "$(dirname "$VENV")"
-          python3 -m venv "$VENV"
-          "$VENV/bin/pip" install --upgrade pip
-          "$VENV/bin/pip" install pyvmomi requests
-        fi
-      args:
-        executable: /bin/sh
-      changed_when: false
-
-    - name: Usar el Python del venv para este play
+    - name: Usar Python del venv
       ansible.builtin.set_fact:
-        ansible_python_interpreter: "{{ vmware_venv_path }}/bin/python"
-
-    ########################################################################
-    # 2) Cargar group_vars/all.yml (si existe)
-    ########################################################################
-
-    - name: Verificar existencia de group_vars/all.yml
-      ansible.builtin.stat:
-        path: "{{ playbook_dir }}/../group_vars/all.yml"
-      register: groupvars_stat
+        ansible_python_interpreter: "{{ venv_path }}/bin/python"
 
     - name: Cargar group_vars/all.yml si existe
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../group_vars/all.yml"
+      register: all_stat
+
+    - name: include all.yml
       ansible.builtin.include_vars:
-        file: "{{ groupvars_stat.stat.path }}"
-      when: groupvars_stat.stat.exists
+        file: "{{ playbook_dir }}/../group_vars/all.yml"
+      when: all_stat.stat.exists
 
-    ########################################################################
-    # 3) Cargar credenciales desde vault.yml (si existe)
-    ########################################################################
-
-    - name: Verificar existencia de vault.yml en la raíz del repo
+    - name: Cargar vault.yml si existe
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../vault.yml"
       register: vault_stat
 
-    - name: Cargar credenciales de vCenter desde vault.yml (si existe)
-      no_log: true
+    - name: include vault.yml
       ansible.builtin.include_vars:
-        file: "{{ vault_stat.stat.path }}"
+        file: "{{ playbook_dir }}/../vault.yml"
       when: vault_stat.stat.exists
+      no_log: true
 
-    ########################################################################
-    # 4) Resolver parámetros efectivos de vCenter
-    #    Prioridad: entorno > group_vars/all.yml > vault.yml
-    ########################################################################
-
-    - name: Resolver endpoint/credenciales desde entorno, vault y group_vars
+    - name: Resolver parámetros vCenter
       ansible.builtin.set_fact:
-        vcenter_hostname: >-
-          {{ lookup('env', 'VCENTER_HOSTNAME')
-             | default(vcenter_hostname | default('', true), true) }}
-        vcenter_username: >-
-          {{ lookup('env', 'VCENTER_USERNAME')
-             | default(vcenter_username | default('', true), true) }}
-        vcenter_password: >-
-          {{ lookup('env', 'VCENTER_PASSWORD')
-             | default(
-                 vcenter_password
-                 | default(vault_vcenter_password | default('', true), true),
-                 true
-               ) }}
-        vcenter_datacenter: "{{ vcenter_datacenter | default('', true) }}"
-        vcenter_datastore: "{{ vcenter_datastore | default('', true) }}"
-        vcenter_cluster: "{{ vcenter_cluster | default('', true) }}"
-        vcenter_network: "{{ vcenter_network | default('', true) }}"
         vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
 
-    - name: Consolidar parámetros efectivos de vCenter
-      ansible.builtin.set_fact:
-        _vc_effective:
-          hostname: "{{ vcenter_hostname }}"
-          username: "{{ vcenter_username }}"
-          password_from_vault: >-
-            {{ 'YES' if (vault_vcenter_password | default('') | length > 0) else 'NO' }}
-          datacenter: "{{ vcenter_datacenter }}"
-          datastore: "{{ vcenter_datastore }}"
-          cluster: "{{ vcenter_cluster }}"
-          network: "{{ vcenter_network }}"
-          validate_certs: "{{ vcenter_validate_certs }}"
-
-    - name: Mostrar parámetros efectivos de vCenter (debug)
-      ansible.builtin.debug:
-        var: _vc_effective
-
-    - name: Validar credenciales y endpoint de vCenter
-      ansible.builtin.assert:
-        that:
-          - (_vc_effective.hostname | length) > 0
-          - (_vc_effective.username | length) > 0
-          - (vcenter_password | default('') | length) > 0
-        fail_msg: |
-          Faltan parámetros de vCenter.
-          Define en:
-            - group_vars/all.yml
-            - vault.yml
-            - o variables de entorno VCENTER_HOSTNAME/VCENTER_USERNAME/VCENTER_PASSWORD.
-
-    - name: Validar datacenter, datastore, cluster y red
-      ansible.builtin.assert:
-        that:
-          - (_vc_effective.datacenter | length) > 0
-          - (_vc_effective.datastore | length) > 0
-          - (_vc_effective.cluster | length) > 0
-          - (_vc_effective.network | length) > 0
-        fail_msg: |
-          Faltan 'vcenter_datacenter', 'vcenter_datastore', 'vcenter_cluster' o 'vcenter_network'.
-          Revísalos en group_vars/all.yml o como extra vars.
-
   tasks:
-    ########################################################################
-    # 5) Crear VMs (clone completo del template) en carpeta PV_IaC
-    ########################################################################
-
     - name: Debug recursos de VMs infra
       ansible.builtin.debug:
         msg:
-          folder: "/{{ _vc_effective.datacenter }}/vm/{{ vm_folder_name }}"
-          template: "{{ template_name }}"
-          num_cpus: "{{ infra_vm_num_cpus }}"
-          memory_mb: "{{ infra_vm_memory_mb }}"
-          target_disk_gb: "{{ infra_vm_disk_gb }}"
+          template: "{{ infra_template }}"
+          folder: "{{ infra_folder }}"
+          num_cpus: "{{ infra_num_cpus }}"
+          memory_mb: "{{ infra_memory_mb }}"
+          disk_gb: "{{ infra_disk_gb }}"
           infra_hosts: "{{ infra_hosts }}"
 
-    - name: Crear VMs infra desde template en carpeta PV_IaC (clone sin customization)
+    - name: Crear VMs infra desde template en carpeta PV_IaC
       community.vmware.vmware_guest:
-        hostname: "{{ _vc_effective.hostname }}"
-        username: "{{ _vc_effective.username }}"
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
-        validate_certs: "{{ _vc_effective.validate_certs }}"
-        datacenter: "{{ _vc_effective.datacenter }}"
-        cluster: "{{ _vc_effective.cluster }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        cluster: "{{ vcenter_cluster }}"
+        datastore: "{{ vcenter_datastore }}"
+        folder: "{{ infra_folder }}"
         name: "{{ item.name }}"
-        template: "{{ template_name }}"
-        datastore: "{{ _vc_effective.datastore }}"
-        folder: "/{{ _vc_effective.datacenter }}/vm/{{ vm_folder_name }}"
-        state: poweredoff
+        template: "{{ infra_template }}"
+        state: poweredon
         hardware:
-          memory_mb: "{{ infra_vm_memory_mb }}"
-          num_cpus: "{{ infra_vm_num_cpus }}"
-        networks:
-          - name: "{{ _vc_effective.network }}"
-      loop: "{{ infra_hosts }}"
-      loop_control:
-        label: "{{ item.name }}"
-      register: infra_vms
-
-    ########################################################################
-    # 6) Extender disco de sistema a 105 GB (hipervisor). Dentro del SO
-    #    habrá que crecer partición/FS aparte.
-    ########################################################################
-
-    - name: Extender disco principal a {{ infra_vm_disk_gb }} GB
-      community.vmware.vmware_guest_disk:
-        hostname: "{{ _vc_effective.hostname }}"
-        username: "{{ _vc_effective.username }}"
-        password: "{{ vcenter_password }}"
-        validate_certs: "{{ _vc_effective.validate_certs }}"
-        datacenter: "{{ _vc_effective.datacenter }}"
-        name: "{{ item.name }}"
+          num_cpus: "{{ infra_num_cpus }}"
+          memory_mb: "{{ infra_memory_mb }}"
         disk:
-          - state: present
-            scsi_controller: 0
-            unit_number: 0
-            size_gb: "{{ infra_vm_disk_gb }}"
+          - size_gb: "{{ infra_disk_gb }}"
+            type: thin
+        networks:
+          - name: "{{ vcenter_network }}"
+        wait_for_ip_address: false
       loop: "{{ infra_hosts }}"
-      loop_control:
-        label: "{{ item.name }}"
+      register: infra_created
 
-    - name: Mostrar resultado de la creación de las VMs infra
+    - name: Mostrar resultado creación infra
       ansible.builtin.debug:
-        var: infra_vms
+        var: infra_created

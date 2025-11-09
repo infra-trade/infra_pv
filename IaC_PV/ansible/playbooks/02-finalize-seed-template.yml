@@ -1,0 +1,125 @@
+---
+- name: Finalizar VM seed y convertirla en template
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    venv_path: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
+
+  pre_tasks:
+    - name: Usar Python del venv
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ venv_path }}/bin/python"
+
+    - name: Cargar group_vars/all.yml si existe
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../group_vars/all.yml"
+      register: all_stat
+
+    - name: include all.yml
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../group_vars/all.yml"
+      when: all_stat.stat.exists
+
+    - name: Cargar vault.yml si existe
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../vault.yml"
+      register: vault_stat
+
+    - name: include vault.yml
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../vault.yml"
+      when: vault_stat.stat.exists
+      no_log: true
+
+    - name: Resolver parámetros vCenter mínimos
+      ansible.builtin.set_fact:
+        vcenter_hostname: "{{ vcenter_hostname }}"
+        vcenter_username: "{{ vcenter_username }}"
+        vcenter_password: "{{ vcenter_password }}"
+        vcenter_datacenter: "{{ vcenter_datacenter }}"
+        vcenter_cluster: "{{ vcenter_cluster }}"
+        vcenter_datastore: "{{ vcenter_datastore }}"
+        vcenter_network: "{{ vcenter_network }}"
+        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+
+  tasks:
+    ####################################################################
+    # 1) Esperar a que la VM tenga Tools/IP (instalada correctamente)
+    ####################################################################
+    - name: Esperar hasta 900s a que la VM tenga IP / Tools
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ seed_vm_name }}"
+        state: poweredon
+        wait_for_ip_address: true
+        wait_for_ip_address_timeout: 900
+      register: seed_info
+      retries: 30
+      delay: 30
+      until: >
+        (seed_info.instance.ipv4 is defined and seed_info.instance.ipv4 != None)
+        or (seed_info.instance.guest_tools_status is defined
+            and seed_info.instance.guest_tools_status != 'guestToolsNotRunning')
+
+    - name: Mostrar info detectada de la seed
+      ansible.builtin.debug:
+        var: seed_info.instance
+
+    ####################################################################
+    # 2) Apagar VM y desconectar ISOs
+    ####################################################################
+    - name: Apagar VM seed
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ seed_vm_name }}"
+        state: poweredoff
+      register: poweredoff
+
+    - name: Quitar ISOs de la VM seed
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ seed_vm_name }}"
+        state: present
+        cdrom:
+          - type: none
+            controller_type: ide
+            controller_number: 0
+            unit_number: 0
+            state: absent
+          - type: none
+            controller_type: ide
+            controller_number: 0
+            unit_number: 1
+            state: absent
+
+    ####################################################################
+    # 3) Convertir a template
+    ####################################################################
+    - name: Convertir VM seed en template
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ seed_vm_name }}"
+        is_template: true
+        state: present
+      register: template_conv
+
+    - name: Mostrar resultado de conversión
+      ansible.builtin.debug:
+        var: template_conv
