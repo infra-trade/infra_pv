@@ -1,51 +1,36 @@
 ---
-- name: Construir y subir seed ISO para ubuntu-seed-24-04
+- name: Construir ISO seed para autoinstall ubuntu-seed-24-04
   hosts: localhost
   gather_facts: false
 
   vars:
-    venv_path: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
-    seed_vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
-    datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
-    linux_user: "{{ linux_user | default('ansible') }}"
-    linux_user_fullname: "{{ linux_user_fullname | default('Ansible Admin') }}"
-    ssh_pubkey_path: "{{ ssh_pubkey_path | default(lookup('env','HOME') + '/.ssh/id_ed25519.pub') }}"
+    seed_vm_name: "ubuntu-seed-24-04"
+    datastore_iso_dir: "ISOS"
 
-    seed_build_dir: "/tmp/seed-{{ seed_vm_name }}"
-    seed_iso_local: "/tmp/seed-{{ seed_vm_name }}.iso"
-    seed_iso_filename: "seed-{{ seed_vm_name }}.iso"
+    # Datos de red de la VM seed (ajusta si quieres)
+    guest_ip: "192.168.5.85"
+    guest_netmask: "255.255.255.0"
+    guest_gateway: "192.168.5.252"
+    guest_dns:
+      - "192.168.10.2"
+      - "1.1.1.1"
+
+    linux_user: "ansible"
+    linux_user_fullname: "Ansible Admin"
+    ssh_pubkey_path: "/home/ansible/.ssh/id_ed25519.pub"
+
+    vcenter_hostname: "192.168.5.150"
+    vcenter_datacenter: "POPULAR_VALORES"
+    vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
+    vcenter_username: "ansible_svc@vsphere.local"
+    vcenter_validate_certs: false
+
+    seed_iso_local_dir: "/tmp/seed-ubuntu-seed-24-04"
+    seed_iso_local_path: "/tmp/seed-ubuntu-seed-24-04.iso"
+    seed_iso_datastore_path: "ISOS/seed-ubuntu-seed-24-04.iso"
 
   pre_tasks:
-    - name: Crear venv para módulos VMware (si no existe)
-      become: true
-      ansible.builtin.shell: |
-        set -e
-        VENV="{{ venv_path }}"
-        if [ ! -x "$VENV/bin/python" ]; then
-          mkdir -p "$(dirname "$VENV")"
-          python3 -m venv "$VENV"
-          "$VENV/bin/pip" install --upgrade pip
-          "$VENV/bin/pip" install pyvmomi requests
-        fi
-      args:
-        executable: /bin/sh
-      changed_when: false
-
-    - name: Usar Python del venv
-      ansible.builtin.set_fact:
-        ansible_python_interpreter: "{{ venv_path }}/bin/python"
-
-    - name: Cargar group_vars/all.yml si existe
-      ansible.builtin.stat:
-        path: "{{ playbook_dir }}/../group_vars/all.yml"
-      register: all_stat
-
-    - name: include all.yml
-      ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../group_vars/all.yml"
-      when: all_stat.stat.exists
-
-    - name: Cargar vault.yml si existe
+    - name: Cargar vault.yml (password vCenter) si existe
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../vault.yml"
       register: vault_stat
@@ -56,116 +41,95 @@
       when: vault_stat.stat.exists
       no_log: true
 
-    - name: Resolver parámetros vCenter
-      ansible.builtin.set_fact:
-        vcenter_hostname: "{{ vcenter_hostname | default(lookup('env','VCENTER_HOSTNAME')) }}"
-        vcenter_username: "{{ vcenter_username | default(lookup('env','VCENTER_USERNAME')) }}"
-        vcenter_password: "{{ vcenter_password | default(lookup('env','VCENTER_PASSWORD')) }}"
-        vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
-        vcenter_datastore: "{{ vcenter_datastore | default('') }}"
-        vcenter_cluster: "{{ vcenter_cluster | default('') }}"
-        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-
-    - name: Consolidar parámetros efectivos
-      ansible.builtin.set_fact:
-        _vc_effective:
-          hostname: "{{ vcenter_hostname }}"
-          username: "{{ vcenter_username }}"
-          datacenter: "{{ vcenter_datacenter }}"
-          datastore: "{{ vcenter_datastore }}"
-          cluster: "{{ vcenter_cluster }}"
-          validate_certs: "{{ vcenter_validate_certs }}"
-          password_from_vault: "{{ 'YES' if (vcenter_password | default('') | length > 0) else 'NO' }}"
-
-    - name: Validar vCenter mínimo
-      ansible.builtin.assert:
-        that:
-          - _vc_effective.hostname | length > 0
-          - _vc_effective.username | length > 0
-          - (vcenter_password | default('')) | length > 0
-          - _vc_effective.datacenter | length > 0
-          - _vc_effective.datastore | length > 0
-        fail_msg: "Faltan parámetros de vCenter."
-        success_msg: "Parámetros vCenter OK."
-
-  tasks:
-    - name: Crear directorio temporal seed
-      ansible.builtin.file:
-        path: "{{ seed_build_dir }}"
-        state: directory
-        mode: "0755"
-
     - name: Leer clave pública SSH
       ansible.builtin.slurp:
         src: "{{ ssh_pubkey_path }}"
-      register: ssh_pubkey_content
+      register: ssh_pubkey_raw
+
+    - name: Decodificar clave pública SSH
+      ansible.builtin.set_fact:
+        ssh_pubkey: "{{ ssh_pubkey_raw.content | b64decode | trim }}"
+
+  tasks:
+    - name: Limpiar directorio local seed
+      ansible.builtin.file:
+        path: "{{ seed_iso_local_dir }}"
+        state: absent
+
+    - name: Crear directorio local seed
+      ansible.builtin.file:
+        path: "{{ seed_iso_local_dir }}"
+        state: directory
+        mode: "0755"
 
     - name: Crear meta-data
       ansible.builtin.copy:
-        dest: "{{ seed_build_dir }}/meta-data"
+        dest: "{{ seed_iso_local_dir }}/meta-data"
         mode: "0644"
         content: |
           instance-id: {{ seed_vm_name }}
           local-hostname: {{ seed_vm_name }}
 
-    - name: Crear user-data con autoinstall
+    - name: Crear user-data (autoinstall)
       ansible.builtin.copy:
-        dest: "{{ seed_build_dir }}/user-data"
+        dest: "{{ seed_iso_local_dir }}/user-data"
         mode: "0644"
         content: |
           #cloud-config
           autoinstall:
             version: 1
-            locale: en_US.UTF-8
-            keyboard:
-              layout: us
             identity:
               hostname: {{ seed_vm_name }}
               username: {{ linux_user }}
-              password: "!"
+              realname: {{ linux_user_fullname }}
+              password: "$6$rounds=4096$mtauto$9o6jlRrU7zR4GgPGNCUhlqPn1YW2bTEp2Yuzjzwy4uGDXnyxpaX8I6tWvjVfw3X2OZQbhHDpVPg2k1m6fYN5U0"  # 'P@ssw0rd' ejemplo
             ssh:
               install-server: true
               authorized-keys:
-                - {{ (ssh_pubkey_content.content | b64decode).strip() }}
+                - {{ ssh_pubkey }}
+            keyboard:
+              layout: "us"
+            locale: "en_US.UTF-8"
             storage:
               layout:
                 name: direct
+            network:
+              network:
+                version: 2
+                ethernets:
+                  ens160:
+                    dhcp4: false
+                    addresses: [{{ guest_ip }}/24]
+                    gateway4: {{ guest_gateway }}
+                    nameservers:
+                      addresses: [{{ guest_dns | join(', ') }}]
             packages:
-              - open-vm-tools
               - qemu-guest-agent
+              - open-vm-tools
             late-commands:
-              - curtin in-target --target=/target systemctl enable qemu-guest-agent
-              - curtin in-target --target=/target systemctl enable open-vm-tools
-          users:
-            - default
+              - curtin in-target -- apt-get update
+              - curtin in-target -- apt-get -y upgrade
+            user-data:
+              disable_root: true
+          # fin
 
-    - name: Generar seed ISO (requiere mkisofs o genisoimage)
+    - name: Crear ISO seed local con etiqueta cidata
       ansible.builtin.command:
-        argv:
-          - mkisofs
-          - -output
-          - "{{ seed_iso_local }}"
-          - -volid
-          - cidata
-          - -joliet
-          - -rock
-          - "{{ seed_build_dir }}/user-data"
-          - "{{ seed_build_dir }}/meta-data"
+        cmd: >
+          genisoimage -output "{{ seed_iso_local_path }}"
+          -volid cidata -joliet -rock
+          meta-data user-data
       args:
-        creates: "{{ seed_iso_local }}"
+        chdir: "{{ seed_iso_local_dir }}"
+      changed_when: true
 
-    - name: Subir seed ISO al datastore
+    - name: Subir ISO seed al datastore
       community.vmware.vsphere_copy:
-        hostname: "{{ _vc_effective.hostname }}"
-        username: "{{ _vc_effective.username }}"
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
-        validate_certs: "{{ _vc_effective.validate_certs }}"
-        datacenter: "{{ _vc_effective.datacenter }}"
-        datastore: "{{ _vc_effective.datastore }}"
-        src: "{{ seed_iso_local }}"
-        path: "{{ datastore_iso_dir }}/{{ seed_iso_filename }}"
-
-    - name: Mostrar rutas finales en datastore
-      ansible.builtin.debug:
-        msg:
-          seed_iso: "[{{ _vc_effective.datastore }}] {{ datastore_iso_dir }}/{{ seed_iso_filename }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        datastore: "{{ vcenter_datastore }}"
+        src: "{{ seed_iso_local_path }}"
+        dest: "{{ seed_iso_datastore_path }}"
