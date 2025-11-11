@@ -1,5 +1,5 @@
 ---
-- name: Crear VM base ubuntu-seed-24-04 con ISOs para autoinstall
+- name: Crear VM seed ubuntu-seed-24-04 con ISOs de Ubuntu + seed
   hosts: localhost
   gather_facts: false
 
@@ -8,35 +8,26 @@
     seed_vm_name: "ubuntu-seed-24-04"
 
   pre_tasks:
-    - name: Crear venv para VMware si no existe
-      become: true
-      ansible.builtin.shell: |
-        set -e
-        VENV="{{ venv_path }}"
-        if [ ! -x "$VENV/bin/python" ]; then
-          mkdir -p "$(dirname "$VENV")"
-          python3 -m venv "$VENV"
-          "$VENV/bin/pip" install --upgrade pip
-          "$VENV/bin/pip" install pyvmomi requests
-        fi
-      args:
-        executable: /bin/sh
-      changed_when: false
-
     - name: Usar Python del venv
       ansible.builtin.set_fact:
         ansible_python_interpreter: "{{ venv_path }}/bin/python"
 
-    - name: Cargar group_vars/all.yml
+    - name: Verificar existencia de group_vars/all.yml
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../group_vars/all.yml"
+      register: all_stat
+
+    - name: Cargar group_vars/all.yml si existe
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../group_vars/all.yml"
+      when: all_stat.stat.exists
 
-    - name: Cargar vault.yml si existe
+    - name: Verificar existencia de vault.yml
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../vault.yml"
       register: vault_stat
 
-    - name: include vault.yml
+    - name: Cargar vault.yml si existe
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../vault.yml"
       when: vault_stat.stat.exists
@@ -48,75 +39,80 @@
         vcenter_username: "{{ vcenter_username }}"
         vcenter_password: "{{ vcenter_password }}"
         vcenter_datacenter: "{{ vcenter_datacenter }}"
-        vcenter_cluster: "{{ vcenter_cluster }}"
         vcenter_datastore: "{{ vcenter_datastore }}"
+        vcenter_cluster: "{{ vcenter_cluster }}"
         vcenter_network: "{{ vcenter_network }}"
         datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
-        # rutas ISOs ya en datastore
-        ubuntu_iso_path: "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/ubuntu-24.04.3-live-server-amd64.iso"
-        seed_iso_path:   "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/seed-ubuntu-seed-24-04.iso"
+        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        seed_vm_num_cpus: "{{ seed_vm_num_cpus | default(2) | int }}"
+        seed_vm_memory_mb: "{{ seed_vm_memory_mb | default(4096) | int }}"
+        seed_vm_disk_gb: "{{ seed_vm_disk_gb | default(40) | int }}"
 
-  tasks:
+    - name: Definir rutas de ISOs en vSphere
+      ansible.builtin.set_fact:
+        ubuntu_iso_path: "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/ubuntu-24.04.3-live-server-amd64.iso"
+        seed_iso_path: "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/seed-ubuntu-seed-24-04.iso"
+
     - name: Validar parámetros mínimos
       ansible.builtin.assert:
         that:
-          - vcenter_password is defined
-          - vcenter_hostname | length > 0
-          - vcenter_datacenter | length > 0
-          - vcenter_cluster | length > 0
-          - vcenter_datastore | length > 0
-          - vcenter_network | length > 0
-        fail_msg: "Faltan parámetros de vCenter / DC / DS / Cluster / Network"
+          - vcenter_hostname is defined
+          - vcenter_username is defined
+          - (vcenter_password | default('')) | length > 0
+          - vcenter_datacenter is defined
+          - vcenter_datastore is defined
+          - vcenter_cluster is defined
+          - vcenter_network is defined
+        fail_msg: "Faltan parámetros de vCenter / scope. Revisa group_vars/all.yml y vault.yml."
+        success_msg: "Parámetros de vCenter OK."
 
-    - name: Eliminar VM seed previa si existe
+  tasks:
+    - name: Eliminar VM seed previa (si existe)
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
-        validate_certs: false
+        validate_certs: "{{ vcenter_validate_certs }}"
         datacenter: "{{ vcenter_datacenter }}"
         name: "{{ seed_vm_name }}"
         state: absent
         force: true
       ignore_errors: true
+      delegate_to: localhost
 
-    - name: Crear VM base con Ubuntu ISO + seed ISO
+    - name: Crear VM seed con Ubuntu ISO + seed ISO
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
-        validate_certs: false
+        validate_certs: "{{ vcenter_validate_certs }}"
         datacenter: "{{ vcenter_datacenter }}"
         cluster: "{{ vcenter_cluster }}"
+        datastore: "{{ vcenter_datastore }}"
         folder: "/{{ vcenter_datacenter }}/vm"
         name: "{{ seed_vm_name }}"
-        state: present
+        state: poweredon
         guest_id: "ubuntu64Guest"
         hardware:
-          num_cpus: 2
-          memory_mb: 4096
-          boot_firmware: "bios"
+          num_cpus: "{{ seed_vm_num_cpus }}"
+          memory_mb: "{{ seed_vm_memory_mb }}"
         disk:
-          - size_gb: 40
+          - size_gb: "{{ seed_vm_disk_gb }}"
             type: thin
-            datastore: "{{ vcenter_datastore }}"
         networks:
           - name: "{{ vcenter_network }}"
             type: dhcp
         cdrom:
           - type: iso
             iso_path: "{{ ubuntu_iso_path }}"
-            controller_type: ide
-            controller_number: 0
-            unit_number: 0
+            state: present
           - type: iso
             iso_path: "{{ seed_iso_path }}"
-            controller_type: ide
-            controller_number: 0
-            unit_number: 1
+            state: present
         wait_for_ip_address: false
       register: seed_create
+      delegate_to: localhost
 
     - name: Mostrar resultado de creación
       ansible.builtin.debug:
-        var: seed_create
+        var: seed_create.instance.hw_power_status
