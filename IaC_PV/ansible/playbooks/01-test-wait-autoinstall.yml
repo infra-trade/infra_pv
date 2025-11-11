@@ -56,9 +56,3 @@
             username: "{{ vcenter_username }}"
             password: "{{ vcenter_password }}"
             validate_c
-
-
-
-
-
-
