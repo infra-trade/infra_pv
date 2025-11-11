@@ -16,8 +16,9 @@
     # Clave pública SSH a inyectar (ajusta si usas otra)
     ssh_pubkey_path: "/home/ansible/.ssh/id_ed25519.pub"
 
-    # Carpeta de ISOs en el datastore (viene de all.yml normalmente)
-    datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
+    # Valor por defecto para la carpeta de ISOs en el datastore
+    # (evita bucles si no hay group_vars/all.yml)
+    datastore_iso_dir_default: "ISOS"
 
   pre_tasks:
     ########################################################################
@@ -98,7 +99,7 @@
             identity:
               hostname: {{ seed_vm_name }}
               username: ansible
-              # Password hash (cámbialo si quieres). Generado con `mkpasswd -m sha-512`.
+              # Password hash (ejemplo). Cámbialo si deseas otro usuario/clave.
               password: "$6$rounds=4096$VZayw08U8gO6$GbP5j2zW07J0B2RnXzYF/3PVQ4FcTFcZ3CrVV3uQeZQdvbJQkX0vQ7zNpkGWr6Nq4bE9RbpLwB0F3e6f0qgJQ1"
 
             ssh:
@@ -161,9 +162,10 @@
         vcenter_hostname: "{{ lookup('env','VCENTER_HOSTNAME') or (vcenter_hostname | default('')) }}"
         vcenter_username: "{{ lookup('env','VCENTER_USERNAME') or (vcenter_username | default('')) }}"
         vcenter_password: "{{ lookup('env','VCENTER_PASSWORD') or (vcenter_password | default('')) }}"
-        vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
+        vcenter_datacenter: "{{ vcenter_datacenter | default('')) }}"
         vcenter_datastore: "{{ vcenter_datastore | default('') }}"
-        datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
+        # OJO: aquí ya NO hay recursión. Si existe datastore_iso_dir en group_vars, se usa; si no, el default.
+        datastore_iso_dir: "{{ (vars.get('datastore_iso_dir') is defined and vars.get('datastore_iso_dir')) | default(datastore_iso_dir_default) }}"
         vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
         vcenter_port: "{{ (vcenter_port | default(443)) | int }}"
 
@@ -175,7 +177,7 @@
           - vcenter_password | length > 0
           - vcenter_datacenter | length > 0
           - vcenter_datastore | length > 0
-        fail_msg: "Faltan parámetros de vCenter (hostname/username/password/datacenter/datastore). Revísalos en all.yml/vault.yml/variables de entorno."
+        fail_msg: "Faltan parámetros de vCenter (hostname/username/password/datacenter/datastore)."
         success_msg: "Parámetros de vCenter OK para subir ISO."
 
     - name: Subir ISO seed al datastore de vSphere
