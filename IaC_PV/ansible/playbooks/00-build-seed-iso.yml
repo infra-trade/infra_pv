@@ -24,61 +24,77 @@
     # 1) Cargar vault (opcional)
     ########################################################################
     - name: Verificar existencia de vault.yml
+      become: true
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../vault.yml"
       register: vault_stat
-      become: true
 
     - name: Cargar vault.yml si existe
+      become: true
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../vault.yml"
       when: vault_stat.stat.exists
       no_log: true
-      become: true
 
     ########################################################################
-    # 2) Leer clave pública SSH
+    # 2) Cargar group_vars/all.yml (vCenter, seed, etc.)
+    ########################################################################
+    - name: Verificar existencia de group_vars/all.yml
+      become: true
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../group_vars/all.yml"
+      register: all_stat
+
+    - name: Cargar group_vars/all.yml si existe
+      become: true
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../group_vars/all.yml"
+      when: all_stat.stat.exists
+
+    ########################################################################
+    # 3) Leer clave pública SSH
     ########################################################################
     - name: Leer clave pública SSH
+      become: true
       ansible.builtin.slurp:
         src: "{{ ssh_pubkey_path }}"
       register: ssh_key_raw
-      become: true
 
     - name: Decodificar clave pública SSH
       ansible.builtin.set_fact:
         ssh_pubkey: "{{ ssh_key_raw.content | b64decode | trim }}"
 
     ########################################################################
-    # 3) Preparar directorio temporal
+    # 4) Preparar directorio temporal
     ########################################################################
     - name: Limpiar directorio local seed
+      become: true
       ansible.builtin.file:
         path: "{{ seed_build_dir }}"
         state: absent
-      become: true
 
     - name: Crear directorio local seed
+      become: true
       ansible.builtin.file:
         path: "{{ seed_build_dir }}"
         state: directory
         mode: "0755"
-      become: true
 
   tasks:
     ########################################################################
-    # 4) Crear meta-data y user-data
+    # 5) Crear meta-data y user-data
     ########################################################################
     - name: Crear meta-data
+      become: true
       ansible.builtin.copy:
         dest: "{{ seed_build_dir }}/meta-data"
         mode: "0644"
         content: |
           instance-id: {{ seed_vm_name }}
           local-hostname: {{ seed_vm_name }}
-      become: true
 
     - name: Crear user-data (autoinstall)
+      become: true
       ansible.builtin.copy:
         dest: "{{ seed_build_dir }}/user-data"
         mode: "0644"
@@ -94,7 +110,7 @@
             identity:
               hostname: {{ seed_vm_name }}
               username: ansible
-              # hash ejemplo, cámbialo si quieres otra clave
+              # Cambia este hash si quieres otra contraseña
               password: "$6$rounds=4096$VZayw08U8gO6$GbP5j2zW07J0B2RnXzYF/3PVQ4FcTFcZ3CrVV3uQeZQdvbJQkX0vQ7zNpkGWr6Nq4bE9RbpLwB0F3e6f0qgJQ1"
 
             ssh:
@@ -116,10 +132,9 @@
                   echo "ansible ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/90-ansible
                   chmod 440 /etc/sudoers.d/90-ansible
                 '
-      become: true
 
     ########################################################################
-    # 5) Crear ISO local (cidata)
+    # 6) Crear ISO local (cidata)
     ########################################################################
     - name: Detectar comando para crear ISO (genisoimage o mkisofs)
       ansible.builtin.shell: |
@@ -139,16 +154,16 @@
       when: iso_cmd.stdout == ""
 
     - name: Crear ISO seed local con etiqueta cidata
+      become: true
       ansible.builtin.shell: >
         {{ iso_cmd.stdout }} -output /tmp/{{ seed_iso_filename }}
         -volid cidata -joliet -rock
         meta-data user-data
       args:
         chdir: "{{ seed_build_dir }}"
-      become: true
 
     ########################################################################
-    # 6) Resolver parámetros vCenter y subir ISO al datastore
+    # 7) Resolver parámetros vCenter y subir ISO al datastore
     ########################################################################
     - name: Resolver parámetros de vCenter mínimos
       ansible.builtin.set_fact:
@@ -157,7 +172,6 @@
         vcenter_password: "{{ lookup('env','VCENTER_PASSWORD') or (vcenter_password | default('')) }}"
         vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
         vcenter_datastore: "{{ vcenter_datastore | default('') }}"
-        # usa valor de all.yml si existe; si no, 'ISOS'
         datastore_iso_dir: "{{ (vars.get('datastore_iso_dir') | default(datastore_iso_dir_default)) }}"
         vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
         vcenter_port: "{{ (vcenter_port | default(443)) | int }}"
@@ -174,6 +188,7 @@
         success_msg: "Parámetros de vCenter OK para subir ISO."
 
     - name: Subir ISO seed al datastore de vSphere
+      delegate_to: localhost
       community.vmware.vsphere_copy:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -183,7 +198,6 @@
         datacenter: "{{ vcenter_datacenter }}"
         datastore: "{{ vcenter_datastore }}"
         path: "{{ datastore_iso_dir }}/{{ seed_iso_filename }}"
-      delegate_to: localhost
 
     - name: Mostrar ubicación final del ISO seed
       ansible.builtin.debug:
