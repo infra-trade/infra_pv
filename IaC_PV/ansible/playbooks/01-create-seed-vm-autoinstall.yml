@@ -40,7 +40,7 @@
       no_log: true
 
     ####################################################################
-    # 3) Resolver parámetros vCenter + recursos seed (variables _eff)
+    # 3) Resolver parámetros vCenter + recursos seed (_eff)
     ####################################################################
     - name: Resolver parámetros vCenter
       ansible.builtin.set_fact:
@@ -53,6 +53,7 @@
         vcenter_network: "{{ vcenter_network }}"
         datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
         vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        vcenter_port_eff: "{{ (vcenter_port | default(443, true)) | int }}"
 
     - name: Normalizar recursos de la VM seed
       ansible.builtin.set_fact:
@@ -73,9 +74,10 @@
         msg:
           ubuntu_iso_path: "{{ ubuntu_iso_path }}"
           seed_iso_path: "{{ seed_iso_path }}"
-          num_cpus: "{{ seed_vm_num_cpus_eff }}"
-          memory_mb: "{{ seed_vm_memory_mb_eff }}"
-          disk_gb: "{{ seed_vm_disk_gb_eff }}"
+          num_cpus_eff: "{{ seed_vm_num_cpus_eff }}"
+          memory_mb_eff: "{{ seed_vm_memory_mb_eff }}"
+          disk_gb_eff: "{{ seed_vm_disk_gb_eff }}"
+          vcenter_port_eff: "{{ vcenter_port_eff }}"
 
     ####################################################################
     # 5) Validaciones
@@ -110,6 +112,7 @@
         name: "{{ seed_vm_name }}"
         state: absent
         force: true
+        port: "{{ vcenter_port_eff }}"
       ignore_errors: true
       delegate_to: localhost
 
@@ -123,6 +126,7 @@
         cluster: "{{ vcenter_cluster }}"
         datastore: "{{ vcenter_datastore }}"
         folder: "/{{ vcenter_datacenter }}/vm"
+        port: "{{ vcenter_port_eff }}"
         name: "{{ seed_vm_name }}"
         state: poweredon
         guest_id: "ubuntu64Guest"
@@ -138,9 +142,15 @@
         cdrom:
           - type: iso
             iso_path: "{{ ubuntu_iso_path }}"
+            controller_type: ide
+            controller_number: 0
+            unit_number: 0
             state: present
           - type: iso
             iso_path: "{{ seed_iso_path }}"
+            controller_type: ide
+            controller_number: 0
+            unit_number: 1
             state: present
         wait_for_ip_address: false
       register: seed_create
