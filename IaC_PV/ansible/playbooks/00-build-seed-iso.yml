@@ -5,21 +5,50 @@
 
   vars:
     seed_vm_name: "ubuntu-seed-24-04"
-    # Directorio temporal donde se arma el seed
     seed_dir: "/tmp/seed-{{ seed_vm_name }}"
-    # Nombre del ISO seed que luego se sube a ISOS/
     seed_iso_local: "/tmp/seed-{{ seed_vm_name }}.iso"
 
   pre_tasks:
     ########################################################################
-    # 0) Verificar genisoimage y cargar vars
+    # 0) Detectar herramienta para crear ISO (genisoimage o mkisofs)
     ########################################################################
 
-    - name: Verificar que genisoimage está instalado
+    - name: Probar si existe genisoimage
       ansible.builtin.command: which genisoimage
       register: geniso_chk
       changed_when: false
-      failed_when: geniso_chk.rc != 0
+      failed_when: false
+
+    - name: Probar si existe mkisofs
+      ansible.builtin.command: which mkisofs
+      register: mkisofs_chk
+      changed_when: false
+      failed_when: false
+
+    - name: Definir comando para crear ISO
+      ansible.builtin.set_fact:
+        iso_cmd: >-
+          {% if geniso_chk.rc == 0 %}
+          {{ geniso_chk.stdout }}
+          {% elif mkisofs_chk.rc == 0 %}
+          {{ mkisofs_chk.stdout }}
+          {% else %}
+          ""
+          {% endif %}
+
+    - name: Validar que existe genisoimage o mkisofs
+      ansible.builtin.assert:
+        that:
+          - iso_cmd | length > 0
+        fail_msg: >
+          No se encontró 'genisoimage' ni 'mkisofs' en el PATH.
+          Instala uno de estos (por ejemplo, en OpenBSD: 'pkg_add cdrtools'
+          para obtener mkisofs) y vuelve a ejecutar este playbook.
+        success_msg: "Herramienta ISO detectada: {{ iso_cmd }}"
+
+    ########################################################################
+    # 1) Cargar group_vars y vault (para ssh_pubkey, usuario, etc.)
+    ########################################################################
 
     - name: Verificar existencia de group_vars/all.yml
       ansible.builtin.stat:
@@ -36,7 +65,7 @@
         path: "{{ playbook_dir }}/../vault.yml"
       register: vault_stat
 
-    - name: Cargar vault.yml si existe (solo por si se usa en otros plays)
+    - name: Cargar vault.yml si existe
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../vault.yml"
       when: vault_stat.stat.exists
@@ -66,7 +95,7 @@
 
   tasks:
     ########################################################################
-    # 1) Preparar directorio seed (meta-data + user-data)
+    # 2) Preparar meta-data y user-data
     ########################################################################
 
     - name: Limpiar directorio local seed (si existe)
@@ -106,20 +135,16 @@
             identity:
               hostname: {{ seed_vm_name }}
               username: {{ seed_linux_user }}
-              # Password dummy (hash de "P@ssw0rd!" solo para cumplir requisito).
-              # El acceso real será por SSH key.
+              # Hash de "P@ssw0rd!" solo para cumplir; acceso real por SSH key
               password: "$6$rounds=4096$N0u1cTp8$3n5mPGcZ0gV1j4N6b0w.WJQ4VqV2RF1v7vTUFEewG5hsTqC.OSW9Vf4kiSomcl1Do/3QGllsS35x7SOB0M9cZ."
             ssh:
               install-server: true
               allow-pw: false
               authorized-keys:
                 - "{{ ssh_pubkey }}"
-            # Particionado simple: todo el disco a /
             storage:
               layout:
                 name: direct
-            # Red: dejar comportamiento por defecto (DHCP si existe),
-            # si no hay DHCP no rompe la instalación.
             network:
               network:
                 version: 2
@@ -129,41 +154,39 @@
                     match:
                       name: "e*"
                     dhcp4: true
-            # No añadir paquetes extra para evitar fallos por repos
             packages: []
             updates: security
             late-commands:
-              # Habilitar sudo sin password para el usuario
               - curtin in-target --target=/target /usr/bin/bash -c "echo '{{ seed_linux_user }} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-{{ seed_linux_user }} && chmod 440 /etc/sudoers.d/90-{{ seed_linux_user }}"
             user-data:
               disable_root: true
 
     ########################################################################
-    # 2) Construir ISO seed con etiqueta 'cidata'
+    # 3) Construir ISO seed con iso_cmd detectado
     ########################################################################
 
     - name: Crear ISO seed local con etiqueta cidata
       become: true
       ansible.builtin.command:
         cmd: >
-          genisoimage
+          {{ iso_cmd }}
           -output {{ seed_iso_local }}
           -volid cidata
           -joliet -rock
           meta-data user-data
       args:
         chdir: "{{ seed_dir }}"
-      register: geniso_out
+      register: iso_build
       changed_when: true
 
-    - name: Mostrar resultado de creación del ISO seed
+    - name: Mostrar resultado creación ISO seed
       ansible.builtin.debug:
         msg:
           iso_path: "{{ seed_iso_local }}"
-          geniso_rc: "{{ geniso_out.rc }}"
+          rc: "{{ iso_build.rc }}"
 
     ########################################################################
-    # 3) Subir ISO seed al datastore (ruta ISOS/)
+    # 4) Subir ISO seed al datastore/ISOS
     ########################################################################
 
     - name: Validar parámetros mínimos de vCenter para upload
