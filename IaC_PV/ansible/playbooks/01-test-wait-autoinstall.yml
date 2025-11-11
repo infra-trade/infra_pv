@@ -1,0 +1,64 @@
+---
+- name: Esperar a que ubuntu-seed-24-04 instale y arranque
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    seed_vm_name: "ubuntu-seed-24-04"
+    timeout_seconds: 900   # 15 minutos
+    interval: 30
+
+  pre_tasks:
+    - name: Usar Python del venv
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware/bin/python' }}"
+
+    - name: Cargar all.yml
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../group_vars/all.yml"
+
+    - name: Cargar vault.yml si existe
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../vault.yml"
+      register: vault_stat
+
+    - name: include vault.yml
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../vault.yml"
+      when: vault_stat.stat.exists
+      no_log: true
+
+  tasks:
+    - name: Encender la VM seed
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ seed_vm_name }}"
+        state: poweredon
+      register: poweron
+
+    - name: Esperar hasta que tenga Tools OK / IP (autoinstall completo)
+      vars:
+        elapsed: "{{ 0 }}"
+      until: >
+        (vm_info.instance.guest_tools_status is defined and
+         vm_info.instance.guest_tools_status != 'guestToolsNotRunning') or
+        (vm_info.instance.ipv4 is defined and vm_info.instance.ipv4 != None)
+      retries: "{{ (timeout_seconds // interval) | int }}"
+      delay: "{{ interval }}"
+      block:
+        - name: Consultar estado VM
+          community.vmware.vmware_guest_info:
+            hostname: "{{ vcenter_hostname }}"
+            username: "{{ vcenter_username }}"
+            password: "{{ vcenter_password }}"
+            validate_c
+
+
+
+
+
+

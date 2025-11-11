@@ -1,0 +1,122 @@
+---
+- name: Crear VM base ubuntu-seed-24-04 con ISOs para autoinstall
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    venv_path: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
+    seed_vm_name: "ubuntu-seed-24-04"
+
+  pre_tasks:
+    - name: Crear venv para VMware si no existe
+      become: true
+      ansible.builtin.shell: |
+        set -e
+        VENV="{{ venv_path }}"
+        if [ ! -x "$VENV/bin/python" ]; then
+          mkdir -p "$(dirname "$VENV")"
+          python3 -m venv "$VENV"
+          "$VENV/bin/pip" install --upgrade pip
+          "$VENV/bin/pip" install pyvmomi requests
+        fi
+      args:
+        executable: /bin/sh
+      changed_when: false
+
+    - name: Usar Python del venv
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ venv_path }}/bin/python"
+
+    - name: Cargar group_vars/all.yml
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../group_vars/all.yml"
+
+    - name: Cargar vault.yml si existe
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../vault.yml"
+      register: vault_stat
+
+    - name: include vault.yml
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../vault.yml"
+      when: vault_stat.stat.exists
+      no_log: true
+
+    - name: Resolver parámetros vCenter
+      ansible.builtin.set_fact:
+        vcenter_hostname: "{{ vcenter_hostname }}"
+        vcenter_username: "{{ vcenter_username }}"
+        vcenter_password: "{{ vcenter_password }}"
+        vcenter_datacenter: "{{ vcenter_datacenter }}"
+        vcenter_cluster: "{{ vcenter_cluster }}"
+        vcenter_datastore: "{{ vcenter_datastore }}"
+        vcenter_network: "{{ vcenter_network }}"
+        datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
+        # rutas ISOs ya en datastore
+        ubuntu_iso_path: "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/ubuntu-24.04.3-live-server-amd64.iso"
+        seed_iso_path:   "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/seed-ubuntu-seed-24-04.iso"
+
+  tasks:
+    - name: Validar parámetros mínimos
+      ansible.builtin.assert:
+        that:
+          - vcenter_password is defined
+          - vcenter_hostname | length > 0
+          - vcenter_datacenter | length > 0
+          - vcenter_cluster | length > 0
+          - vcenter_datastore | length > 0
+          - vcenter_network | length > 0
+        fail_msg: "Faltan parámetros de vCenter / DC / DS / Cluster / Network"
+
+    - name: Eliminar VM seed previa si existe
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ seed_vm_name }}"
+        state: absent
+        force: true
+      ignore_errors: true
+
+    - name: Crear VM base con Ubuntu ISO + seed ISO
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        cluster: "{{ vcenter_cluster }}"
+        folder: "/{{ vcenter_datacenter }}/vm"
+        name: "{{ seed_vm_name }}"
+        state: present
+        guest_id: "ubuntu64Guest"
+        hardware:
+          num_cpus: 2
+          memory_mb: 4096
+          boot_firmware: "bios"
+        disk:
+          - size_gb: 40
+            type: thin
+            datastore: "{{ vcenter_datastore }}"
+        networks:
+          - name: "{{ vcenter_network }}"
+            type: dhcp
+        cdrom:
+          - type: iso
+            iso_path: "{{ ubuntu_iso_path }}"
+            controller_type: ide
+            controller_number: 0
+            unit_number: 0
+          - type: iso
+            iso_path: "{{ seed_iso_path }}"
+            controller_type: ide
+            controller_number: 0
+            unit_number: 1
+        wait_for_ip_address: false
+      register: seed_create
+
+    - name: Mostrar resultado de creación
+      ansible.builtin.debug:
+        var: seed_create
