@@ -13,18 +13,16 @@
     # Directorio temporal para construir meta-data / user-data
     seed_build_dir: "/tmp/seed-ubuntu-seed-24-04"
 
-    # Clave pública SSH a inyectar (ajusta si usas otra)
+    # Clave pública SSH a inyectar
     ssh_pubkey_path: "/home/ansible/.ssh/id_ed25519.pub"
 
-    # Valor por defecto para la carpeta de ISOs en el datastore
-    # (evita bucles si no hay group_vars/all.yml)
+    # Default si no viene de group_vars/all.yml
     datastore_iso_dir_default: "ISOS"
 
   pre_tasks:
     ########################################################################
-    # 1) Cargar vault (opcional) para tener vcenter_password si existe
+    # 1) Cargar vault (opcional)
     ########################################################################
-
     - name: Verificar existencia de vault.yml
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../vault.yml"
@@ -41,7 +39,6 @@
     ########################################################################
     # 2) Leer clave pública SSH
     ########################################################################
-
     - name: Leer clave pública SSH
       ansible.builtin.slurp:
         src: "{{ ssh_pubkey_path }}"
@@ -55,7 +52,6 @@
     ########################################################################
     # 3) Preparar directorio temporal
     ########################################################################
-
     - name: Limpiar directorio local seed
       ansible.builtin.file:
         path: "{{ seed_build_dir }}"
@@ -73,7 +69,6 @@
     ########################################################################
     # 4) Crear meta-data y user-data
     ########################################################################
-
     - name: Crear meta-data
       ansible.builtin.copy:
         dest: "{{ seed_build_dir }}/meta-data"
@@ -99,7 +94,7 @@
             identity:
               hostname: {{ seed_vm_name }}
               username: ansible
-              # Password hash (ejemplo). Cámbialo si deseas otro usuario/clave.
+              # hash ejemplo, cámbialo si quieres otra clave
               password: "$6$rounds=4096$VZayw08U8gO6$GbP5j2zW07J0B2RnXzYF/3PVQ4FcTFcZ3CrVV3uQeZQdvbJQkX0vQ7zNpkGWr6Nq4bE9RbpLwB0F3e6f0qgJQ1"
 
             ssh:
@@ -124,9 +119,8 @@
       become: true
 
     ########################################################################
-    # 5) Crear ISO local (cidata) con genisoimage o mkisofs
+    # 5) Crear ISO local (cidata)
     ########################################################################
-
     - name: Detectar comando para crear ISO (genisoimage o mkisofs)
       ansible.builtin.shell: |
         if command -v genisoimage >/dev/null 2>&1; then
@@ -156,16 +150,15 @@
     ########################################################################
     # 6) Resolver parámetros vCenter y subir ISO al datastore
     ########################################################################
-
     - name: Resolver parámetros de vCenter mínimos
       ansible.builtin.set_fact:
         vcenter_hostname: "{{ lookup('env','VCENTER_HOSTNAME') or (vcenter_hostname | default('')) }}"
         vcenter_username: "{{ lookup('env','VCENTER_USERNAME') or (vcenter_username | default('')) }}"
         vcenter_password: "{{ lookup('env','VCENTER_PASSWORD') or (vcenter_password | default('')) }}"
-        vcenter_datacenter: "{{ vcenter_datacenter | default('')) }}"
+        vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
         vcenter_datastore: "{{ vcenter_datastore | default('') }}"
-        # OJO: aquí ya NO hay recursión. Si existe datastore_iso_dir en group_vars, se usa; si no, el default.
-        datastore_iso_dir: "{{ (vars.get('datastore_iso_dir') is defined and vars.get('datastore_iso_dir')) | default(datastore_iso_dir_default) }}"
+        # usa valor de all.yml si existe; si no, 'ISOS'
+        datastore_iso_dir: "{{ (vars.get('datastore_iso_dir') | default(datastore_iso_dir_default)) }}"
         vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
         vcenter_port: "{{ (vcenter_port | default(443)) | int }}"
 
