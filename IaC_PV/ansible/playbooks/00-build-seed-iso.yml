@@ -7,7 +7,7 @@
     seed_vm_name_default: "ubuntu-seed-24-04"
     datastore_iso_dir_default: "ISOS"
     ubuntu_iso_filename_default: "ubuntu-24.04.3-live-server-amd64.iso"
-    # Rutas probables de genisoimage/mkisofs en *BSD/Linux (sin bash)
+    # Rutas probables de genisoimage/mkisofs (sin bash)
     iso_candidates:
       - /usr/local/bin/genisoimage
       - /usr/bin/genisoimage
@@ -148,7 +148,7 @@
         vcenter_username_eff: "{{ lookup('env','VCENTER_USERNAME') or (vcenter_username | default('')) }}"
         vcenter_password_eff: "{{ lookup('env','VCENTER_PASSWORD') or (vcenter_password | default('')) }}"
         vcenter_datacenter_eff: "{{ vcenter_datacenter | default('') }}"
-        vcenter_datastore_eff: "{{ vcenter_datastore | default('')) }}"
+        vcenter_datastore_eff: "{{ vcenter_datastore | default('') }}"
         datastore_iso_dir_eff: "{{ datastore_iso_dir | default(datastore_iso_dir_default) }}"
         ubuntu_iso_filename_eff: "{{ ubuntu_iso_filename | default(ubuntu_iso_filename_default) }}"
         vcenter_validate_certs_eff: "{{ (vcenter_validate_certs | default(false)) | bool }}"
