@@ -1,94 +1,15 @@
 ---
-- name: Esperar a que autoinstall termine en ubuntu-seed-24-04
+- name: Esperar a que autoinstall termine en {{ seed_vm_name }}
   hosts: localhost
   gather_facts: false
 
-  vars:
-    venv_path: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
-    seed_vm_name: "{{ seed_vm_name | default('ubuntu-seed-24-04') }}"
-
   pre_tasks:
-    ########################################################################
-    # 1) Usar Python del venv (asumimos creado por 01-create-template-vm)
-    ########################################################################
     - name: Usar Python del venv
       ansible.builtin.set_fact:
-        ansible_python_interpreter: "{{ venv_path }}/bin/python"
-
-    ########################################################################
-    # 2) Cargar group_vars/all.yml
-    ########################################################################
-    - name: Verificar existencia de group_vars/all.yml
-      ansible.builtin.stat:
-        path: "{{ playbook_dir }}/../group_vars/all.yml"
-      register: all_stat
-
-    - name: Cargar group_vars/all.yml si existe
-      ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../group_vars/all.yml"
-      when: all_stat.stat.exists
-
-    ########################################################################
-    # 3) Cargar vault.yml (credenciales vCenter)
-    ########################################################################
-    - name: Verificar existencia de vault.yml
-      ansible.builtin.stat:
-        path: "{{ playbook_dir }}/../vault.yml"
-      register: vault_stat
-
-    - name: Cargar vault.yml si existe
-      ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../vault.yml"
-      when: vault_stat.stat.exists
-      no_log: true
-
-    ########################################################################
-    # 4) Resolver parámetros mínimos de vCenter
-    ########################################################################
-    - name: Resolver parámetros vCenter mínimos
-      ansible.builtin.set_fact:
-        vcenter_hostname: "{{ vcenter_hostname | default(lookup('env','VCENTER_HOSTNAME')) }}"
-        vcenter_username: "{{ vcenter_username | default(lookup('env','VCENTER_USERNAME')) }}"
-        vcenter_password: "{{ vcenter_password | default(lookup('env','VCENTER_PASSWORD')) }}"
-        vcenter_datacenter: "{{ vcenter_datacenter | default('') }}"
-        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-
-    - name: Validar parámetros vCenter
-      ansible.builtin.assert:
-        that:
-          - vcenter_hostname is defined and vcenter_hostname | length > 0
-          - vcenter_username is defined and vcenter_username | length > 0
-          - vcenter_password is defined and vcenter_password | length > 0
-          - vcenter_datacenter is defined and vcenter_datacenter | length > 0
-        fail_msg: "Faltan parámetros de vCenter. Revisa group_vars/all.yml o vault.yml."
-        success_msg: "Parámetros de vCenter OK."
+        ansible_python_interpreter: "/home/ansible/.ansible/venvs/vmware/bin/python"
 
   tasks:
-    ########################################################################
-    # 5) Encender la VM seed (si está apagada)
-    ########################################################################
-    - name: Encender la VM seed si es necesario
-      delegate_to: localhost
-      community.vmware.vmware_guest:
-        hostname: "{{ vcenter_hostname }}"
-        username: "{{ vcenter_username }}"
-        password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs }}"
-        datacenter: "{{ vcenter_datacenter }}"
-        name: "{{ seed_vm_name }}"
-        state: poweredon
-        wait_for_ip_address: false
-      register: power_on
-
-    - name: Mostrar estado tras encender
-      ansible.builtin.debug:
-        var: power_on.instance.hw_power_status
-
-    ########################################################################
-    # 6) Esperar a que autoinstall finalice (Tools + IP)
-    ########################################################################
     - name: Esperar hasta 3600s a que la VM tenga IP y Tools (autoinstall)
-      delegate_to: localhost
       community.vmware.vmware_guest_info:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -97,19 +18,16 @@
         datacenter: "{{ vcenter_datacenter }}"
         name: "{{ seed_vm_name }}"
       register: vm_info
-      until: >
-        (vm_info.instance.guest_tools_status is defined and
-         vm_info.instance.guest_tools_status == 'guestToolsRunning')
-        and
-        (vm_info.instance.ipv4 is defined and
-         (vm_info.instance.ipv4 | string) not in ['','None'])
-      retries: 60        # 60 * 60s = 1 hora
+      retries: 60
       delay: 60
+      until: >
+        (vm_info.instance.guest_tools_status is defined and vm_info.instance.guest_tools_status in ['guestToolsRunning', 'guestToolsExecutingScripts']) and
+        (vm_info.instance.ipv4 is defined and vm_info.instance.ipv4 | length > 0)
       failed_when: false
 
     - name: Mostrar resultado final de la espera
       ansible.builtin.debug:
         msg:
-          power_state: "{{ vm_info.instance.hw_power_status | default('unknown') }}"
-          tools_status: "{{ vm_info.instance.guest_tools_status | default('unknown') }}"
-          ipv4: "{{ vm_info.instance.ipv4 | default('none') }}"
+          power_state: "{{ (vm_info.instance.hw_power_status | default('unknown')) }}"
+          tools_status: "{{ (vm_info.instance.guest_tools_status | default('unknown')) }}"
+          ipv4: "{{ (vm_info.instance.ipv4 | default('')) }}"

@@ -4,105 +4,33 @@
   gather_facts: false
 
   vars:
-    venv_path: "{{ lookup('env','HOME') + '/.ansible/venvs/vmware' }}"
-    seed_vm_name: "ubuntu-seed-24-04"
+    iso_dir_default: "ISOS"
+    ubuntu_iso_path: "[{{ vcenter_datastore }}] {{ datastore_iso_dir | default(iso_dir_default) }}/{{ ubuntu_iso_filename }}"
+    seed_iso_path:   "[{{ vcenter_datastore }}] {{ datastore_iso_dir | default(iso_dir_default) }}/{{ seed_iso_filename }}"
+
+    # Portgroup con salida a Internet para la instalación.
+    # Si no existe en tu vSphere, pon aquí el que sí tenga Internet.
+    install_network_pg: "VM Network"
+    use_second_nic_for_install: true
 
   pre_tasks:
-    ####################################################################
-    # 1) Usar Python del venv
-    ####################################################################
     - name: Usar Python del venv
       ansible.builtin.set_fact:
-        ansible_python_interpreter: "{{ venv_path }}/bin/python"
-
-    ####################################################################
-    # 2) Cargar group_vars/all.yml y vault.yml
-    ####################################################################
-    - name: Verificar existencia de group_vars/all.yml
-      ansible.builtin.stat:
-        path: "{{ playbook_dir }}/../group_vars/all.yml"
-      register: all_stat
-
-    - name: Cargar group_vars/all.yml si existe
-      ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../group_vars/all.yml"
-      when: all_stat.stat.exists
-
-    - name: Verificar existencia de vault.yml
-      ansible.builtin.stat:
-        path: "{{ playbook_dir }}/../vault.yml"
-      register: vault_stat
-
-    - name: Cargar vault.yml si existe
-      ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../vault.yml"
-      when: vault_stat.stat.exists
-      no_log: true
-
-    ####################################################################
-    # 3) Resolver parámetros vCenter + recursos seed (_eff)
-    ####################################################################
-    - name: Resolver parámetros vCenter
-      ansible.builtin.set_fact:
-        vcenter_hostname: "{{ vcenter_hostname }}"
-        vcenter_username: "{{ vcenter_username }}"
-        vcenter_password: "{{ vcenter_password }}"
-        vcenter_datacenter: "{{ vcenter_datacenter }}"
-        vcenter_datastore: "{{ vcenter_datastore }}"
-        vcenter_cluster: "{{ vcenter_cluster }}"
-        vcenter_network: "{{ vcenter_network }}"
-        datastore_iso_dir: "{{ datastore_iso_dir | default('ISOS') }}"
-        vcenter_validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-        vcenter_port_eff: "{{ (vcenter_port | default(443, true)) | int }}"
-
-    - name: Normalizar recursos de la VM seed
-      ansible.builtin.set_fact:
-        seed_vm_num_cpus_eff: "{{ (seed_vm_num_cpus | default(2, true)) | int }}"
-        seed_vm_memory_mb_eff: "{{ (seed_vm_memory_mb | default(4096, true)) | int }}"
-        seed_vm_disk_gb_eff: "{{ (seed_vm_disk_gb | default(40, true)) | int }}"
-
-    ####################################################################
-    # 4) Definir rutas de ISOs en vSphere
-    ####################################################################
-    - name: Definir rutas de ISOs en vSphere
-      ansible.builtin.set_fact:
-        ubuntu_iso_path: "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/ubuntu-24.04.3-live-server-amd64.iso"
-        seed_iso_path: "[{{ vcenter_datastore }}] {{ datastore_iso_dir }}/seed-ubuntu-seed-24-04.iso"
-
-    - name: DEBUG nombres/rutas de ISOs y recursos
-      ansible.builtin.debug:
-        msg:
-          ubuntu_iso_path: "{{ ubuntu_iso_path }}"
-          seed_iso_path: "{{ seed_iso_path }}"
-          num_cpus_eff: "{{ seed_vm_num_cpus_eff }}"
-          memory_mb_eff: "{{ seed_vm_memory_mb_eff }}"
-          disk_gb_eff: "{{ seed_vm_disk_gb_eff }}"
-          vcenter_port_eff: "{{ vcenter_port_eff }}"
-
-    ####################################################################
-    # 5) Validaciones
-    ####################################################################
-    - name: Validar parámetros mínimos
-      ansible.builtin.assert:
-        that:
-          - vcenter_hostname is defined
-          - vcenter_username is defined
-          - (vcenter_password | default('')) | length > 0
-          - vcenter_datacenter is defined
-          - vcenter_datastore is defined
-          - vcenter_cluster is defined
-          - vcenter_network is defined
-          - seed_vm_num_cpus_eff | int > 0
-          - seed_vm_memory_mb_eff | int > 0
-          - seed_vm_disk_gb_eff | int > 0
-        fail_msg: "Faltan parámetros de vCenter / scope o recursos seed inválidos."
-        success_msg: "Parámetros de vCenter OK."
+        ansible_python_interpreter: "/home/ansible/.ansible/venvs/vmware/bin/python"
 
   tasks:
-    ####################################################################
-    # 6) Eliminar VM previa y crear nueva con las ISOs
-    ####################################################################
-    - name: Eliminar VM seed previa (si existe)
+    - name: Validar parámetros vCenter
+      ansible.builtin.assert:
+        that:
+          - vcenter_hostname | length > 0
+          - vcenter_username | length > 0
+          - (vcenter_password | default('')) | length > 0
+          - vcenter_datacenter | length > 0
+          - vcenter_datastore | length > 0
+          - vcenter_cluster   | length > 0
+        fail_msg: "Faltan parámetros vCenter."
+
+    - name: Eliminar VM previa (si existe)
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -112,33 +40,51 @@
         name: "{{ seed_vm_name }}"
         state: absent
         force: true
-        port: "{{ vcenter_port_eff }}"
-      ignore_errors: true
-      delegate_to: localhost
+      register: _del
+      failed_when: false
 
-    - name: Crear VM seed con Ubuntu ISO + seed ISO
+    - name: Construir lista de redes
+      ansible.builtin.set_fact:
+        seed_networks: >-
+          {{
+            (
+              [
+                { 'name': vcenter_network, 'type': 'dhcp' }
+              ]
+              +
+              (
+                use_second_nic_for_install | default(false) | bool
+                and install_network_pg != vcenter_network
+                and install_network_pg | length > 0
+                ? [ { 'name': install_network_pg, 'type': 'dhcp' } ]
+                : []
+              )
+            )
+          }}
+
+    - name: Crear VM seed con Ubuntu ISO + seed ISO (nocloud)
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs }}"
+        folder: "/{{ vcenter_datacenter }}/vm"
         datacenter: "{{ vcenter_datacenter }}"
         cluster: "{{ vcenter_cluster }}"
         datastore: "{{ vcenter_datastore }}"
-        folder: "/{{ vcenter_datacenter }}/vm"
-        port: "{{ vcenter_port_eff }}"
         name: "{{ seed_vm_name }}"
-        state: poweredon
+        state: present
         guest_id: "ubuntu64Guest"
         hardware:
-          num_cpus: "{{ seed_vm_num_cpus_eff }}"
-          memory_mb: "{{ seed_vm_memory_mb_eff }}"
+          num_cpus: "{{ seed_vm_num_cpus }}"
+          memory_mb: "{{ seed_vm_memory_mb }}"
+          scsi: paravirtual
+          boot_firmware: bios
         disk:
-          - size_gb: "{{ seed_vm_disk_gb_eff }}"
+          - size_gb: "{{ seed_vm_disk_gb }}"
             type: thin
-        networks:
-          - name: "{{ vcenter_network }}"
-            type: dhcp
+            datastore: "{{ vcenter_datastore }}"
+        networks: "{{ seed_networks }}"
         cdrom:
           - type: iso
             iso_path: "{{ ubuntu_iso_path }}"
@@ -152,10 +98,23 @@
             controller_number: 0
             unit_number: 1
             state: present
-        wait_for_ip_address: false
+        state_change_timeout: 180
+        wait_for_ip_address: no
       register: seed_create
-      delegate_to: localhost
 
-    - name: Mostrar resultado de creación
+    - name: Encender VM
+      community.vmware.vmware_guest_powerstate:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ seed_vm_name }}"
+        state: powered-on
+
+    - name: Mostrar redes usadas e ISOs
       ansible.builtin.debug:
-        var: seed_create.instance.hw_power_status
+        msg:
+          networks: "{{ seed_networks }}"
+          ubuntu_iso_path: "{{ ubuntu_iso_path }}"
+          seed_iso_path: "{{ seed_iso_path }}"
