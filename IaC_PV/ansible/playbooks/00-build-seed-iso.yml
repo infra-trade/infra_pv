@@ -4,10 +4,17 @@
   gather_facts: false
 
   vars:
-    # Defaults (NO autorreferenciar!)
     seed_vm_name_default: "ubuntu-seed-24-04"
     datastore_iso_dir_default: "ISOS"
     ubuntu_iso_filename_default: "ubuntu-24.04.3-live-server-amd64.iso"
+    # Rutas probables de genisoimage/mkisofs en *BSD/Linux (sin bash)
+    iso_candidates:
+      - /usr/local/bin/genisoimage
+      - /usr/bin/genisoimage
+      - /bin/genisoimage
+      - /usr/local/bin/mkisofs
+      - /usr/bin/mkisofs
+      - /bin/mkisofs
 
   pre_tasks:
     - name: Cargar vault.yml (password vCenter) si existe
@@ -16,11 +23,13 @@
       no_log: true
       when: lookup('ansible.builtin.fileglob', playbook_dir + '/../vault.yml', errors='ignore') | length > 0
 
-    # -------- Resolver variables efectivas (sin bucles) --------
     - name: Resolver seed_vm_name (efectivo)
       ansible.builtin.set_fact:
-        seed_vm_name_eff: "{{ (seed_vm_name is defined and seed_vm_name|string|length>0)
-                              | ternary(seed_vm_name, seed_vm_name_default) }}"
+        seed_vm_name_eff: >-
+          {{
+            (seed_vm_name is defined and seed_vm_name|string|length>0)
+            | ternary(seed_vm_name, seed_vm_name_default)
+          }}
 
     - name: Resolver ssh_pubkey_path (ENV > all.yml > default)
       ansible.builtin.set_fact:
@@ -38,7 +47,7 @@
 
     - name: Fallar si no existe la clave pública
       ansible.builtin.fail:
-        msg: "No existe la clave pública en {{ ssh_pubkey_path_eff }}. Define ssh_pubkey_path en group_vars/all.yml o exporta SSH_PUBKEY_PATH."
+        msg: "No existe la clave pública en {{ ssh_pubkey_path_eff }}. Define ssh_pubkey_path o exporta SSH_PUBKEY_PATH."
       when: not _pubkey_stat.stat.exists
 
     - name: Resolver rutas locales (efectivas)
@@ -47,7 +56,7 @@
         seed_local_iso: "/tmp/seed-{{ seed_vm_name_eff }}.iso"
 
   tasks:
-    # -------- Construcción de la ISO seed (cidata) --------
+    # ---------- Construcción ISO seed ----------
     - name: Leer clave pública SSH
       ansible.builtin.slurp:
         src: "{{ ssh_pubkey_path_eff }}"
@@ -87,7 +96,8 @@
             identity:
               hostname: {{ seed_vm_name_eff }}
               username: ansible
-              password: "$6$rounds=4096$7bQ1j2t1$eJz4zM7o3C1pWm9y1ZzF5o3N8m7gA0mQf8mCw3g8H6qYq7sZ0hQ2i2sC4cJ1qF/"  # 'ansible'
+              # password = 'ansible'
+              password: "$6$rounds=4096$7bQ1j2t1$eJz4zM7o3C1pWm9y1ZzF5o3N8m7gA0mQf8mCw3g8H6qYq7sZ0hQ2i2sC4cJ1qF/"
             locale: en_US.UTF-8
             keyboard: { layout: us, variant: "" }
             ssh:
@@ -99,26 +109,31 @@
               - qemu-guest-agent
               - open-vm-tools
             storage:
-              layout:
-                name: direct
+              layout: { name: direct }
             early-commands:
               - "systemctl disable --now snapd || true"
             late-commands:
               - "curtin in-target --target=/target -- sh -c \"echo 'ansible ALL=(ALL) NOPASSWD:ALL' >/etc/sudoers.d/90-ansible && chmod 0440 /etc/sudoers.d/90-ansible\""
 
-    - name: Detectar comando para crear ISO (genisoimage o mkisofs)
-      ansible.builtin.command: "bash -lc 'command -v genisoimage >/dev/null 2>&1 && echo genisoimage || (command -v mkisofs >/dev/null 2>&1 && echo mkisofs || echo NONE)'"
-      register: _iso_cmd
-      changed_when: false
+    # ---------- Detección sin bash ----------
+    - name: Probar candidatos de herramienta ISO
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ iso_candidates }}"
+      register: iso_stats
 
-    - name: Fallar si no hay herramienta para crear ISO
+    - name: Elegir primera herramienta encontrada
+      ansible.builtin.set_fact:
+        iso_cmd: "{{ (iso_stats.results | selectattr('stat.exists') | map(attribute='stat.path') | list)[0] | default('') }}"
+
+    - name: Fallar si no hay genisoimage/mkisofs
       ansible.builtin.fail:
-        msg: "No se encontró genisoimage ni mkisofs. Instala uno (p.ej. apt-get install genisoimage)."
-      when: _iso_cmd.stdout == "NONE"
+        msg: "No se encontró genisoimage ni mkisofs en {{ iso_candidates }}. Instala uno (en OpenBSD: pkg_add cdrtools)."
+      when: iso_cmd | length == 0
 
     - name: Crear ISO seed local con etiqueta cidata
       ansible.builtin.command: >
-        {{ _iso_cmd.stdout }}
+        {{ iso_cmd }}
         -output {{ seed_local_iso }}
         -volid cidata -joliet -rock
         meta-data user-data
@@ -126,14 +141,14 @@
         chdir: "{{ seed_local_dir }}"
       changed_when: true
 
-    # -------- Opcional: subir al datastore vSphere --------
+    # ---------- (Opcional) Subida a vSphere ----------
     - name: Resolver parámetros vCenter (efectivos)
       ansible.builtin.set_fact:
         vcenter_hostname_eff: "{{ lookup('env','VCENTER_HOSTNAME') or (vcenter_hostname | default('')) }}"
         vcenter_username_eff: "{{ lookup('env','VCENTER_USERNAME') or (vcenter_username | default('')) }}"
         vcenter_password_eff: "{{ lookup('env','VCENTER_PASSWORD') or (vcenter_password | default('')) }}"
         vcenter_datacenter_eff: "{{ vcenter_datacenter | default('') }}"
-        vcenter_datastore_eff: "{{ vcenter_datastore | default('') }}"
+        vcenter_datastore_eff: "{{ vcenter_datastore | default('')) }}"
         datastore_iso_dir_eff: "{{ datastore_iso_dir | default(datastore_iso_dir_default) }}"
         ubuntu_iso_filename_eff: "{{ ubuntu_iso_filename | default(ubuntu_iso_filename_default) }}"
         vcenter_validate_certs_eff: "{{ (vcenter_validate_certs | default(false)) | bool }}"
@@ -148,7 +163,7 @@
           - vcenter_password_eff | length > 0
           - vcenter_datacenter_eff | length > 0
           - vcenter_datastore_eff | length > 0
-        fail_msg: "Faltan parámetros de vCenter (hostname/username/password/datacenter/datastore). Define en group_vars/all.yml o exporta variables VCENTER_*."
+        fail_msg: "Faltan parámetros vCenter (hostname/username/password/datacenter/datastore)."
       when: seed_local_iso is exists
 
     - name: Subir ISO al datastore ({{ datastore_iso_dir_eff }}/{{ seed_iso_filename_eff }})
