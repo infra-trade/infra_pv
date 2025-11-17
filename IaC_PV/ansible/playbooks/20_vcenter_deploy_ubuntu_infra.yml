@@ -1,5 +1,5 @@
 ---
-- name: Crear VMs de infraestructura en vCenter desde plantilla Ubuntu 24.04
+- name: Crear VMs de infraestructura en vCenter desde PV-INFRA-IaC
   hosts: localhost
   gather_facts: false
   become: false
@@ -11,14 +11,18 @@
     # Datos de vCenter (hostname/user/pass vienen del vault)
     vcenter_datacenter: "POPULAR_VALORES"
     vcenter_cluster: "PV-CLUSTER"
-    vcenter_folder: "PV_IaC"
+
+    # Ruta COMPLETA a la carpeta de VMs (como se ve en vmware_vm_info)
+    # Carpeta PV_IaC dentro de /POPULAR_VALORES/vm
+    vcenter_folder: "/POPULAR_VALORES/vm/PV_IaC"
+
     vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
 
     # Nombre del portgroup / red donde estarán las VMs (VLAN-5)
     vcenter_network: "VLAN-5"
 
-    # Nombre de la plantilla Ubuntu 24.04 en vCenter
-    ubuntu_template: "Ubuntu-Base-24.04"
+    # Usaremos la VM existente PV-INFRA-IaC como "plantilla base" para clonar
+    ubuntu_template: "PV-INFRA-IaC"
 
     # Configuración de red (ajusta gateway / DNS a tu entorno)
     vm_netmask: "255.255.255.0"
@@ -46,7 +50,19 @@
 
   tasks:
 
-    - name: Crear/actualizar VMs de infraestructura
+    - name: Crear carpeta PV_IaC si no existe (idempotente)
+      community.vmware.vmware_folder:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder_type: vm
+        folder: "PV_IaC"
+        state: present
+      delegate_to: localhost
+
+    - name: Crear/actualizar VMs de infraestructura desde PV-INFRA-IaC
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -58,7 +74,7 @@
         folder: "{{ vcenter_folder }}"
 
         name: "{{ item.name }}"
-        template: "{{ ubuntu_template }}"
+        template: "{{ ubuntu_template }}"     # clonar desde la VM PV-INFRA-IaC
         state: poweredon
 
         hardware:
@@ -83,7 +99,7 @@
         # Customization para hostname/dominio/DNS
         customization:
           hostname: "{{ item.name }}"
-          domain: "pv.lab.local"
+          domain: "popvalores.local"
           dns_servers: "{{ vm_dns_servers }}"
 
         wait_for_ip_address: no
