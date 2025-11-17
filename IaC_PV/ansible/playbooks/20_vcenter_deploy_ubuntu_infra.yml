@@ -1,0 +1,102 @@
+---
+- name: Crear VMs de infraestructura en vCenter desde plantilla Ubuntu 24.04
+  hosts: localhost
+  gather_facts: false
+  become: false
+
+  collections:
+    - community.vmware
+
+  vars:
+    # Datos de vCenter (hostname, user, pass vienen del vault)
+    vcenter_datacenter: "POPULAR_VALORES"
+    vcenter_cluster: "PV-CLUSTER"
+    vcenter_folder: "PV_IaC"
+    vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
+
+    # Nombre del portgroup / red en vCenter (ajusta al tuyo)
+    vcenter_network: "VM Network"
+
+    # Plantilla de Ubuntu ya creada en vCenter
+    ubuntu_template: "ubuntu-24.04-base-template"
+
+    # Configuración de red (ajusta gateway / DNS a tu entorno)
+    vm_netmask: "255.255.255.0"
+    vm_gateway: "192.168.5.1"
+    vm_dns_servers:
+      - "192.168.5.1"
+
+    # Definición de las VMs a crear
+    ubuntu_infra_vms:
+      - name: "pv-infra-master"
+        cpu: 3
+        memory_mb: 24576          # 24 GB
+        disk_gb: 140
+        ip: "192.168.5.85"
+      - name: "pv-infra-nodo1"
+        cpu: 2
+        memory_mb: 16384          # 16 GB
+        disk_gb: 140
+        ip: "192.168.5.86"
+      - name: "pv-infra-nodo2"
+        cpu: 2
+        memory_mb: 16384          # 16 GB
+        disk_gb: 140
+        ip: "192.168.5.87"
+
+  tasks:
+
+    - name: Crear/actualizar VMs de infraestructura
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+
+        datacenter: "{{ vcenter_datacenter }}"
+        cluster: "{{ vcenter_cluster }}"
+        folder: "{{ vcenter_folder }}"
+
+        name: "{{ item.name }}"
+        template: "{{ ubuntu_template }}"
+        state: poweredon
+
+        hardware:
+          memory_mb: "{{ item.memory_mb }}"
+          num_cpus: "{{ item.cpu }}"
+
+        disk:
+          - size_gb: "{{ item.disk_gb }}"
+            type: thin
+            datastore: "{{ vcenter_datastore }}"
+
+        networks:
+          - name: "{{ vcenter_network }}"
+            type: static
+            start_connected: true
+
+        customization:
+          hostname: "{{ item.name }}"
+          domain: "pv.lab.local"
+          dns_servers: "{{ vm_dns_servers }}"
+          network_interfaces:
+            - type: static
+              ip: "{{ item.ip }}"
+              subnet_mask: "{{ vm_netmask }}"
+              gateway: "{{ vm_gateway }}"
+
+        wait_for_ip_address: no
+      loop: "{{ ubuntu_infra_vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      delegate_to: localhost
+
+    - name: Mostrar resumen de VMs creadas
+      debug:
+        msg: >
+          VM {{ item.name }} creada/actualizada con {{ item.cpu }} vCPU,
+          {{ item.memory_mb }} MB RAM, disco {{ item.disk_gb }} GB en
+          {{ vcenter_datastore }} con IP {{ item.ip }}.
+      loop: "{{ ubuntu_infra_vms }}"
+      loop_control:
+        label: "{{ item.name }}"
