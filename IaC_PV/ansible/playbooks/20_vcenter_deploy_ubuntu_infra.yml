@@ -29,9 +29,9 @@
     vm_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
     vm_network: "VLAN-5"
     vm_netmask: "255.255.255.0"
-    vm_gateway: "192.168.5.1"
+    vm_gateway: "192.168.5.252"
     vm_dns_servers:
-      - "192.168.5.10"
+      - "192.168.10.2"
       - "8.8.8.8"
 
   tasks:
