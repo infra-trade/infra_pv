@@ -12,9 +12,9 @@
     vcenter_datacenter: "POPULAR_VALORES"
     vcenter_cluster: "PV-CLUSTER"
 
-    # Ruta COMPLETA a la carpeta de VMs (como se ve en vmware_vm_info)
-    # Carpeta PV_IaC dentro de /POPULAR_VALORES/vm
-    vcenter_folder: "/POPULAR_VALORES/vm/PV_IaC"
+    # Nombre de la carpeta de VMs dentro del datacenter (debes crear PV_IaC en el cliente vSphere)
+    # Ruta lógica: /POPULAR_VALORES/vm/PV_IaC
+    vcenter_folder: "PV_IaC"
 
     vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
 
@@ -49,18 +49,6 @@
         ip: "192.168.5.87"
 
   tasks:
-
-    - name: Crear carpeta PV_IaC si no existe (idempotente)
-      community.vmware.vmware_folder:
-        hostname: "{{ vcenter_hostname }}"
-        username: "{{ vcenter_username }}"
-        password: "{{ vcenter_password }}"
-        validate_certs: false
-        datacenter: "{{ vcenter_datacenter }}"
-        folder_type: vm
-        folder: "PV_IaC"
-        state: present
-      delegate_to: localhost
 
     - name: Crear/actualizar VMs de infraestructura desde PV-INFRA-IaC
       community.vmware.vmware_guest:
