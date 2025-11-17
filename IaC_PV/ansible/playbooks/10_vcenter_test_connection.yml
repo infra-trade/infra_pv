@@ -2,6 +2,7 @@
 - name: Test conexión a vCenter desde localhost
   hosts: localhost
   gather_facts: false
+  become: false         # <- IMPORTANTE: NO usar sudo
 
   collections:
     - community.vmware
