@@ -18,8 +18,8 @@
     # Lista de VMs de infraestructura a eliminar
     ubuntu_infra_vms:
       - "pv-infra-master"
-      - "pv-infra-nodo1"
-      - "pv-infra-nodo2"
+      - "pv-infra-noc"
+      - "pv-infra-soc"
 
   tasks:
 
