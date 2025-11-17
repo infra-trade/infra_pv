@@ -1,5 +1,5 @@
 ---
-- name: Listar VMs y plantillas en vCenter
+- name: Listar VMs y posibles plantillas en vCenter
   hosts: localhost
   gather_facts: false
   become: false
@@ -19,13 +19,13 @@
         show_folder: true
       register: vm_info
 
-    - name: Mostrar nombre, si es plantilla y datacenter/carpeta
+    - name: Mostrar nombre, SO invitado, datacenter y carpeta
       debug:
         msg: >
-          name={{ item.config.name }}
-          template={{ item.config.template }}
+          name={{ item.guest_name }}
+          guest_fullname={{ item.guest_fullname }}
           datacenter={{ item.datacenter }}
           folder={{ item.folder }}
       loop: "{{ vm_info.virtual_machines }}"
       loop_control:
-        label: "{{ item.config.name }}"
+        label: "{{ item.guest_name }}"
