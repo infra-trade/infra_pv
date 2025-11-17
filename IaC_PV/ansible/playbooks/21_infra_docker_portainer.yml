@@ -1,44 +1,80 @@
 ---
-- name: "Base de infraestructura: Docker, Portainer, NTP, herramientas de red"
+# ============================================================================
+# PLAY 21 - Instalar Docker y desplegar Portainer (Server + Agents)
+# Archivo listo para copiar/pegar
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# 1) Asegurar Docker instalado y funcionando en TODOS los hosts de infraestructura
+#    (master + nodos donde se quiera usar Portainer)
+# ---------------------------------------------------------------------------
+- name: 21 - Instalar y habilitar Docker en todos los hosts
   hosts: all
   become: true
-  gather_facts: true
+  vars:
+    docker_packages:
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - apt-transport-https
+      - software-properties-common
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
 
   tasks:
-    - name: Mostrar host sobre el que se está trabajando
-      ansible.builtin.debug:
-        msg: "Configurando {{ inventory_hostname }} (ansible_host={{ ansible_host }}) en grupos {{ group_names }}"
-
-    - name: Actualizar caché de APT
+    - name: Actualizar cache de paquetes APT
       ansible.builtin.apt:
         update_cache: yes
-        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
 
-    - name: Instalar paquetes base de red y troubleshooting
+    - name: Instalar dependencias base para Docker
       ansible.builtin.apt:
         name:
-          - chrony
-          - htop
-          - iputils-ping
-          - net-tools
-          - nmap
-          - tcpdump
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - apt-transport-https
+          - software-properties-common
         state: present
+      when: ansible_os_family == "Debian"
 
-    - name: Configurar zona horaria a Costa Rica
-      ansible.builtin.command: timedatectl set-timezone America/Costa_Rica
+    - name: Crear directorio para llaves APT (si no existe)
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+      when: ansible_os_family == "Debian"
 
-    - name: Habilitar y arrancar servicio NTP
-      ansible.builtin.service:
-        name: chrony
-        state: started
-        enabled: true
+    - name: Agregar llave GPG oficial de Docker
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.gpg
+        mode: "0644"
+      when: ansible_distribution == "Ubuntu"
 
-    - name: Instalar Docker Engine
+    - name: Configurar repositorio APT de Docker
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg]
+          https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        filename: docker
+      when: ansible_distribution == "Ubuntu"
+
+    - name: Actualizar cache de paquetes tras agregar repo Docker
       ansible.builtin.apt:
-        name:
-          - docker.io
+        update_cache: yes
+      when: ansible_distribution == "Ubuntu"
+
+    - name: Instalar paquetes de Docker
+      ansible.builtin.apt:
+        name: "{{ docker_packages }}"
         state: present
+      when: ansible_distribution == "Ubuntu"
 
     - name: Habilitar y arrancar servicio Docker
       ansible.builtin.service:
@@ -46,69 +82,78 @@
         state: started
         enabled: true
 
-    - name: Añadir usuario remoto al grupo docker
-      ansible.builtin.user:
-        name: "{{ ansible_user | default('pvinfra') }}"
-        groups: docker
-        append: yes
-      when: ansible_user is defined
+# ---------------------------------------------------------------------------
+# 2) Desplegar Portainer SERVER en pv-infra-master
+# ---------------------------------------------------------------------------
+- name: 21 - Desplegar Portainer Server en pv-infra-master
+  hosts: pv-infra-master
+  become: true
 
-    # =========================
-    # Portainer Server en MASTER
-    # =========================
-    - name: Crear volumen de datos para Portainer en el master
-      ansible.builtin.shell: |
-        if ! docker volume ls | awk '{print $2}' | grep -w portainer_data >/dev/null 2>&1; then
-          docker volume create portainer_data
-        fi
-      args:
-        warn: false
-      when: "'pv_infra_master' in group_names"
+  tasks:
+    - name: Crear volumen de datos para Portainer (Server)
+      ansible.builtin.command:
+        cmd: docker volume create portainer_data
+      register: portainer_volume_create
+      changed_when: "'Error' not in portainer_volume_create.stderr"
 
-    - name: Eliminar contenedor Portainer en el master si ya existe
-      ansible.builtin.shell: |
-        if docker ps -a | grep -w portainer >/dev/null 2>&1; then
-          docker rm -f portainer
-        fi
-      args:
-        warn: false
-      when: "'pv_infra_master' in group_names"
+    - name: Eliminar contenedor Portainer existente (si lo hay)
+      ansible.builtin.command:
+        cmd: docker rm -f portainer
+      register: remove_portainer
+      failed_when: remove_portainer.rc != 0 and 'No such container' not in remove_portainer.stderr
+      changed_when: remove_portainer.rc == 0
 
-    - name: Desplegar Portainer Server en el master
-      ansible.builtin.shell: |
-        docker run -d \
-          -p 8000:8000 \
-          -p 9443:9443 \
-          --name portainer \
-          --restart=always \
-          -v /var/run/docker.sock:/var/run/docker.sock \
-          -v portainer_data:/data \
+    - name: Desplegar contenedor Portainer Server
+      ansible.builtin.command:
+        cmd: >
+          docker run -d
+          -p 9443:9443
+          --name portainer
+          --restart=always
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v portainer_data:/data
           portainer/portainer-ce:latest
-      args:
-        warn: false
-      when: "'pv_infra_master' in group_names"
+      register: run_portainer
+      changed_when: "'Error' not in run_portainer.stderr"
 
-    # =========================
-    # Portainer Agent en NODOS
-    # =========================
-    - name: Eliminar contenedor Portainer Agent si ya existe
-      ansible.builtin.shell: |
-        if docker ps -a | grep -w portainer_agent >/dev/null 2>&1; then
-          docker rm -f portainer_agent
-        fi
-      args:
-        warn: false
-      when: "'pv_infra_nodes' in group_names"
+# ---------------------------------------------------------------------------
+# 3) Desplegar Portainer AGENT en los nodos (grupo portainer_agents)
+#
+#    IMPORTANTE:
+#    - En tu inventario, define un grupo así:
+#
+#      [portainer_agents]
+#      nodo1-trade-pruebas
+#      nodo2-trade-produccion
+#      # ...otros nodos donde quieras el Agent
+# ---------------------------------------------------------------------------
+- name: 21 - Desplegar Portainer Agent en nodos
+  hosts: portainer_agents
+  become: true
 
-    - name: Desplegar Portainer Agent en nodos
-      ansible.builtin.shell: |
-        docker run -d \
-          -p 9001:9001 \
-          --name portainer_agent \
-          --restart=always \
-          -v /var/run/docker.sock:/var/run/docker.sock \
-          -v /var/lib/docker/volumes:/var/lib/docker/volumes \
+  tasks:
+    - name: Crear volumen de datos para Portainer Agent
+      ansible.builtin.command:
+        cmd: docker volume create portainer_agent_data
+      register: portainer_agent_volume_create
+      changed_when: "'Error' not in portainer_agent_volume_create.stderr"
+
+    - name: Eliminar contenedor Portainer Agent existente (si lo hay)
+      ansible.builtin.command:
+        cmd: docker rm -f portainer_agent
+      register: remove_portainer_agent
+      failed_when: remove_portainer_agent.rc != 0 and 'No such container' not in remove_portainer_agent.stderr
+      changed_when: remove_portainer_agent.rc == 0
+
+    - name: Desplegar contenedor Portainer Agent
+      ansible.builtin.command:
+        cmd: >
+          docker run -d
+          --name portainer_agent
+          --restart=always
+          -p 9001:9001
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v /var/lib/docker/volumes:/var/lib/docker/volumes
           portainer/agent:latest
-      args:
-        warn: false
-      when: "'pv_infra_nodes' in group_names"
+      register: run_portainer_agent
+      changed_when: "'Error' not in run_portainer_agent.stderr"
