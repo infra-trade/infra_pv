@@ -10,8 +10,8 @@
 
   vars:
     # ⚠️ CAMBIA ESTO POR LOS NOMBRES REALES QUE VES EN VCENTER
-    vcenter_datacenter: "TU_DATACENTER_EXACTO"
-    vcenter_cluster: "TU_CLUSTER_EXACTO"
+    vcenter_datacenter: "POPULAR_VALORES"
+    vcenter_cluster: "PV-CLUSTER"
 
     # Plantilla base desde donde se clonan las VMs
     vm_source_name: "PV-INFRA-IaC"
