@@ -12,8 +12,8 @@
     vcenter_datacenter: "POPULAR_VALORES"
     vcenter_cluster: "PV-CLUSTER"
 
-    # Nombre de la carpeta de VMs dentro del datacenter (debes crear PV_IaC en el cliente vSphere)
-    # Ruta lógica: /POPULAR_VALORES/vm/PV_IaC
+    # Nombre de la carpeta de VMs dentro del datacenter
+    # Asegúrate de que exista la carpeta PV_IaC en el cliente vSphere
     vcenter_folder: "PV_IaC"
 
     vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
@@ -30,11 +30,11 @@
     vm_dns_servers:
       - "192.168.10.2"
 
-    # Definición de las VMs a crear
+    # Definición de las VMs a crear (por ahora solo usamos el nombre y la IP)
     ubuntu_infra_vms:
       - name: "pv-infra-master"
         cpu: 3
-        memory_mb: 24576        # 24 GB RAM
+        memory_mb: 24576        # 24 GB RAM (se usará luego, no en este paso)
         disk_gb: 140
         ip: "192.168.5.85"
       - name: "pv-infra-nodo1"
@@ -65,9 +65,7 @@
         template: "{{ ubuntu_template }}"     # clonar desde la VM PV-INFRA-IaC
         state: poweredon
 
-        hardware:
-          memory_mb: "{{ item.memory_mb }}"
-          num_cpus: "{{ item.cpu }}"
+        # De momento NO tocamos hardware (CPU/RAM) para evitar errores de hot-add
 
         disk:
           - size_gb: "{{ item.disk_gb }}"
@@ -99,9 +97,8 @@
     - name: Mostrar resumen de VMs creadas
       debug:
         msg: >
-          VM {{ item.name }} creada/actualizada con {{ item.cpu }} vCPU,
-          {{ item.memory_mb }} MB RAM, disco {{ item.disk_gb }} GB en
-          {{ vcenter_datastore }} con IP {{ item.ip }} en {{ vcenter_network }}.
+          VM {{ item.name }} clonada desde {{ ubuntu_template }} en carpeta {{ vcenter_folder }},
+          datastore {{ vcenter_datastore }}, IP {{ item.ip }} en {{ vcenter_network }}.
       loop: "{{ ubuntu_infra_vms }}"
       loop_control:
         label: "{{ item.name }}"
