@@ -59,6 +59,7 @@
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
 
+        # IMPORTANTE: No tocar hardware para evitar cpuHotAdd/memoryHotAdd
         networks:
           - name: "{{ vm_network }}"
             type: static
@@ -78,6 +79,7 @@
           - pv_infra_temp
         ansible_host: "{{ item.ip }}"
         ansible_user: "{{ infra_ssh_user }}"
+        # Desactiva comprobación estricta de host key para evitar problemas
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
       loop: "{{ infra_vms }}"
 
@@ -95,7 +97,7 @@
 - name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas
   hosts: pv_infra_temp
   gather_facts: false
-  remote_user: "{{ ansible_user | default('pvinfra') }}"
+  remote_user: "{{ infra_ssh_user }}"
   become: true
   serial: 1
 
@@ -112,30 +114,34 @@
         state: started
       delegate_to: localhost
 
+    - name: Dar tiempo extra al sistema para terminar el arranque
+      ansible.builtin.pause:
+        seconds: 30
+
     - name: Crear carpeta .ssh si no existe
       ansible.builtin.file:
-        path: "/home/{{ ansible_user | default('pvinfra') }}/.ssh"
+        path: "/home/{{ infra_ssh_user }}/.ssh"
         state: directory
-        owner: "{{ ansible_user | default('pvinfra') }}"
-        group: "{{ ansible_user | default('pvinfra') }}"
+        owner: "{{ infra_ssh_user }}"
+        group: "{{ infra_ssh_user }}"
         mode: "0700"
 
     - name: Autorizar llave pública del nodo Ansible
       ansible.posix.authorized_key:
-        user: "{{ ansible_user | default('pvinfra') }}"
+        user: "{{ infra_ssh_user }}"
         state: present
         key: "{{ ssh_public_key }}"
 
     - name: Asegurar que el usuario está en el grupo sudo
       ansible.builtin.user:
-        name: "{{ ansible_user | default('pvinfra') }}"
+        name: "{{ infra_ssh_user }}"
         groups: "sudo"
         append: true
 
     - name: Permitir sudo sin contraseña para el usuario
       ansible.builtin.copy:
-        dest: "/etc/sudoers.d/99-{{ ansible_user | default('pvinfra') }}-nopasswd"
-        content: "{{ ansible_user | default('pvinfra') }} ALL=(ALL) NOPASSWD:ALL\n"
+        dest: "/etc/sudoers.d/99-{{ infra_ssh_user }}-nopasswd"
+        content: "{{ infra_ssh_user }} ALL=(ALL) NOPASSWD:ALL\n"
         owner: root
         group: root
         mode: "0440"
