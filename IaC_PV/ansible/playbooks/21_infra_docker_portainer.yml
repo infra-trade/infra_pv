@@ -1,37 +1,41 @@
 ---
 # ============================================================================
-# PLAY 21 - Instalar Docker y desplegar Portainer (Server + Agents)
-# Archivo listo para copiar/pegar
+# PLAY 21 - Instalar Docker (si hace falta) y desplegar Portainer
 # ============================================================================
 
 # ---------------------------------------------------------------------------
-# 1) Asegurar Docker instalado y funcionando en TODOS los hosts de infraestructura
-#    (master + nodos donde se quiera usar Portainer)
+# 1) Asegurar Docker instalado y habilitado en TODOS los hosts
+#    - Si ya hay docker instalado, NO intenta reinstalar ni tocar repos.
+#    - Si no está, lo instala desde los repos de Ubuntu (docker.io).
 # ---------------------------------------------------------------------------
 - name: 21 - Instalar y habilitar Docker en todos los hosts
   hosts: all
   become: true
   vars:
-    docker_packages:
-      - ca-certificates
-      - curl
-      - gnupg
-      - lsb-release
-      - apt-transport-https
-      - software-properties-common
-      - docker-ce
-      - docker-ce-cli
-      - containerd.io
-      - docker-buildx-plugin
+    docker_packages_ubuntu:
+      - docker.io
       - docker-compose-plugin
 
   tasks:
-    - name: Actualizar cache de paquetes APT
+    - name: Comprobar si Docker ya está instalado
+      ansible.builtin.command: docker --version
+      register: docker_check
+      ignore_errors: true
+      changed_when: false
+
+    - name: Mostrar estado actual de Docker en el host
+      ansible.builtin.debug:
+        msg: "Docker ya está instalado en {{ inventory_hostname }} (salida: {{ docker_check.stdout }})"
+      when: docker_check.rc == 0
+
+    - name: Actualizar cache de paquetes APT (solo si falta Docker)
       ansible.builtin.apt:
         update_cache: yes
-      when: ansible_os_family == "Debian"
+      when:
+        - ansible_os_family == "Debian"
+        - docker_check.rc != 0
 
-    - name: Instalar dependencias base para Docker
+    - name: Instalar dependencias base para Docker (solo si falta Docker)
       ansible.builtin.apt:
         name:
           - ca-certificates
@@ -41,40 +45,17 @@
           - apt-transport-https
           - software-properties-common
         state: present
-      when: ansible_os_family == "Debian"
+      when:
+        - ansible_os_family == "Debian"
+        - docker_check.rc != 0
 
-    - name: Crear directorio para llaves APT (si no existe)
-      ansible.builtin.file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: "0755"
-      when: ansible_os_family == "Debian"
-
-    - name: Agregar llave GPG oficial de Docker
-      ansible.builtin.get_url:
-        url: https://download.docker.com/linux/ubuntu/gpg
-        dest: /etc/apt/keyrings/docker.gpg
-        mode: "0644"
-      when: ansible_distribution == "Ubuntu"
-
-    - name: Configurar repositorio APT de Docker
-      ansible.builtin.apt_repository:
-        repo: >-
-          deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg]
-          https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
-        filename: docker
-      when: ansible_distribution == "Ubuntu"
-
-    - name: Actualizar cache de paquetes tras agregar repo Docker
+    - name: Instalar Docker desde los repos de Ubuntu (docker.io) si no está instalado
       ansible.builtin.apt:
-        update_cache: yes
-      when: ansible_distribution == "Ubuntu"
-
-    - name: Instalar paquetes de Docker
-      ansible.builtin.apt:
-        name: "{{ docker_packages }}"
+        name: "{{ docker_packages_ubuntu }}"
         state: present
-      when: ansible_distribution == "Ubuntu"
+      when:
+        - ansible_distribution == "Ubuntu"
+        - docker_check.rc != 0
 
     - name: Habilitar y arrancar servicio Docker
       ansible.builtin.service:
@@ -119,13 +100,14 @@
 # ---------------------------------------------------------------------------
 # 3) Desplegar Portainer AGENT en los nodos (grupo portainer_agents)
 #
-#    IMPORTANTE:
-#    - En tu inventario, define un grupo así:
+#    INVENTARIO (ejemplo):
 #
-#      [portainer_agents]
-#      nodo1-trade-pruebas
-#      nodo2-trade-produccion
-#      # ...otros nodos donde quieras el Agent
+#    [pv-infra-master]
+#    pv-infra-master
+#
+#    [portainer_agents]
+#    pv-infra-nodo1
+#    pv-infra-nodo2
 # ---------------------------------------------------------------------------
 - name: 21 - Desplegar Portainer Agent en nodos
   hosts: portainer_agents
