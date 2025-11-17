@@ -10,8 +10,6 @@
 
   vars:
     # Usuario SSH con el que nos vamos a conectar a las VMs recién clonadas
-    # Si luego ves que el usuario real del template es otro (ubuntu, cloud-user, etc),
-    # cámbialo aquí.
     infra_ssh_user: "pvinfra"
 
     infra_vms:
@@ -97,7 +95,7 @@
 - name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas
   hosts: pv_infra_temp
   gather_facts: false
-  remote_user: "{{ infra_ssh_user }}"
+  remote_user: "{{ ansible_user | default('pvinfra') }}"
   become: true
   serial: 1
 
@@ -116,28 +114,28 @@
 
     - name: Crear carpeta .ssh si no existe
       ansible.builtin.file:
-        path: "/home/{{ infra_ssh_user }}/.ssh"
+        path: "/home/{{ ansible_user | default('pvinfra') }}/.ssh"
         state: directory
-        owner: "{{ infra_ssh_user }}"
-        group: "{{ infra_ssh_user }}"
+        owner: "{{ ansible_user | default('pvinfra') }}"
+        group: "{{ ansible_user | default('pvinfra') }}"
         mode: "0700"
 
     - name: Autorizar llave pública del nodo Ansible
       ansible.posix.authorized_key:
-        user: "{{ infra_ssh_user }}"
+        user: "{{ ansible_user | default('pvinfra') }}"
         state: present
         key: "{{ ssh_public_key }}"
 
-    - name: Asegurar que el usuario {{ infra_ssh_user }} está en el grupo sudo
+    - name: Asegurar que el usuario está en el grupo sudo
       ansible.builtin.user:
-        name: "{{ infra_ssh_user }}"
+        name: "{{ ansible_user | default('pvinfra') }}"
         groups: "sudo"
         append: true
 
-    - name: Permitir sudo sin contraseña para {{ infra_ssh_user }}
+    - name: Permitir sudo sin contraseña para el usuario
       ansible.builtin.copy:
-        dest: /etc/sudoers.d/99-{{ infra_ssh_user }}-nopasswd
-        content: "{{ infra_ssh_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        dest: "/etc/sudoers.d/99-{{ ansible_user | default('pvinfra') }}-nopasswd"
+        content: "{{ ansible_user | default('pvinfra') }} ALL=(ALL) NOPASSWD:ALL\n"
         owner: root
         group: root
         mode: "0440"
