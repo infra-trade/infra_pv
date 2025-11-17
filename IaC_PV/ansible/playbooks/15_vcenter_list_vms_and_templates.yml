@@ -1,0 +1,28 @@
+---
+- name: Listar VMs y plantillas en vCenter
+  hosts: localhost
+  gather_facts: false
+  become: false
+
+  collections:
+    - community.vmware
+
+  vars:
+    vcenter_datacenter: "POPULAR_VALORES"
+
+  tasks:
+    - name: Obtener info de VMs/plantillas del datacenter
+      community.vmware.vmware_vm_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+      register: vm_info
+
+    - name: Mostrar nombres y si son plantilla
+      debug:
+        msg: "name={{ item.config.name }} template={{ item.config.template }}"
+      loop: "{{ vm_info.virtual_machines }}"
+      loop_control:
+        label: "{{ item.config.name }}"

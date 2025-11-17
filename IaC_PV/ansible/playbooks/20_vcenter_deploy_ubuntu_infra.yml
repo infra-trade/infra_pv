@@ -18,7 +18,7 @@
     vcenter_network: "VLAN-5"
 
     # Nombre de la plantilla Ubuntu 24.04 en vCenter
-    ubuntu_template: "ubuntu-24.04-base-template"
+    ubuntu_template: "Ubuntu-Base-24.04"
 
     # Configuración de red (ajusta gateway / DNS a tu entorno)
     vm_netmask: "255.255.255.0"
