@@ -26,9 +26,10 @@
 
     # Configuración de red (ajusta gateway / DNS a tu entorno)
     vm_netmask: "255.255.255.0"
-    vm_gateway: "192.168.5.1"
+    vm_gateway: "192.168.5.252"
     vm_dns_servers:
-      - "192.168.5.1"
+      - "192.168.10.2"
+      - "192.168.10.50"
 
     # Definición de las VMs a crear (por ahora usamos SOLO nombre e IP;
     # los valores de cpu/memory/disk_gb son informativos para futuras tareas)
@@ -83,7 +84,7 @@
         # Customization para hostname/dominio/DNS
         customization:
           hostname: "{{ item.name }}"
-          domain: "pv.lab.local"
+          domain: "popvalores.local"
           dns_servers: "{{ vm_dns_servers }}"
 
         wait_for_ip_address: no
