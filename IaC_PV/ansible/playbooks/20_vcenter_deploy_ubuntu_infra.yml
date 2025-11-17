@@ -4,7 +4,7 @@
   gather_facts: false
   connection: local
 
-  # Cargamos credenciales y parámetros de vCenter desde el inventory de vcenter
+  # Cargamos credenciales y parámetros de vCenter desde el inventario de vcenter
   vars_files:
     - "../inventories/vcenter/group_vars/all/vcenter.yml"
 
@@ -12,7 +12,7 @@
     infra_vms:
       - name: pv-infra-master
         ip: "192.168.5.85"
-        cpu: 3          # Por ahora NO se usan, pero los dejamos documentados
+        cpu: 3          # Documentativo, ya no lo tocamos desde Ansible
         memory_mb: 24576
         disk_gb: 140
       - name: pv-infra-nodo1
@@ -38,7 +38,7 @@
       - "8.8.8.8"
 
   tasks:
-    - name: Crear/actualizar VMs de infraestructura (clonar template) DEJÁNDOLAS APAGADAS
+    - name: Crear/actualizar VMs de infraestructura (clonar template) y ENCENDERLAS
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -50,11 +50,11 @@
         folder: "{{ vm_folder }}"
 
         name: "{{ item.name }}"
-        state: poweredoff          # Aseguramos que queden apagadas
+        state: poweredon          # <--- ANTES estaba poweredoff
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
 
-        # IMPORTANTE: NO definimos 'hardware' aquí para evitar errores de cpuHotAdd/memoryHotAdd
+        # IMPORTANTE: Sin bloque 'hardware' para no disparar cpuHotAdd/memoryHotAdd
         networks:
           - name: "{{ vm_network }}"
             type: static
@@ -82,6 +82,7 @@
           VM {{ item.name }} clonada desde {{ vm_source_name }}
           en carpeta {{ vm_folder }}, datastore {{ vm_datastore }},
           IP {{ item.ip }} en {{ vm_network }}.
+
       loop: "{{ infra_vms }}"
 
 # ======================================================================
