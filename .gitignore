@@ -1,0 +1,6 @@
+.vscode/
+.idea/
+*.retry
+.vault_pass.txt
+.venv/
+__pycache__/
