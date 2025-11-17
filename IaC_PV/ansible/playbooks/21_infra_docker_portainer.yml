@@ -1,5 +1,5 @@
 ---
-- name: Base de infraestructura: Docker, Portainer, NTP, herramientas de red
+- name: "Base de infraestructura: Docker, Portainer, NTP, herramientas de red"
   hosts: pv_infra_master:pv_infra_nodes
   gather_facts: true
   become: true
@@ -8,7 +8,7 @@
     # Zona horaria para todas las VMs
     target_timezone: "America/Costa_Rica"
 
-    # Imagenes de Portainer
+    # Imágenes de Portainer
     portainer_image: "portainer/portainer-ce:latest"
     portainer_agent_image: "portainer/agent:latest"
 
@@ -16,12 +16,12 @@
     #####################################################################
     # 1. Paquetes base y herramientas de troubleshooting
     #####################################################################
-    - name: Actualizar índice de paquetes APT
+    - name: "Actualizar índice de paquetes APT"
       ansible.builtin.apt:
         update_cache: yes
         cache_valid_time: 3600
 
-    - name: Instalar herramientas de red y utilidades básicas
+    - name: "Instalar herramientas de red y utilidades básicas"
       ansible.builtin.apt:
         name:
           - ca-certificates
@@ -44,57 +44,57 @@
     #####################################################################
     # 2. NTP + Zona horaria Costa Rica
     #####################################################################
-    - name: Instalar chrony para NTP
+    - name: "Instalar chrony para NTP"
       ansible.builtin.apt:
         name: chrony
         state: present
 
-    - name: Habilitar y arrancar servicio chrony
+    - name: "Habilitar y arrancar servicio chrony"
       ansible.builtin.systemd:
         name: chrony
         enabled: yes
         state: started
 
-    - name: Configurar timezone a America/Costa_Rica
+    - name: "Configurar timezone a America/Costa_Rica"
       ansible.builtin.command: timedatectl set-timezone "{{ target_timezone }}"
       changed_when: false
 
     #####################################################################
     # 3. Docker en todos los hosts
     #####################################################################
-    - name: Instalar Docker desde repositorios de Ubuntu
+    - name: "Instalar Docker desde repositorios de Ubuntu"
       ansible.builtin.apt:
         name: docker.io
         state: present
 
-    - name: Habilitar y arrancar servicio Docker
+    - name: "Habilitar y arrancar servicio Docker"
       ansible.builtin.systemd:
         name: docker
         enabled: yes
         state: started
 
-    - name: Agregar usuario actual de Ansible al grupo docker
+    - name: "Agregar usuario remoto al grupo docker"
       ansible.builtin.user:
-        name: "{{ ansible_user }}"
+        name: "{{ ansible_user | default(ansible_ssh_user) | default('pvinfra') }}"
         groups: docker
         append: yes
 
     #####################################################################
     # 4. Portainer SERVER en el master
     #####################################################################
-    - name: Eliminar contenedor Portainer existente (si lo hay) en master
+    - name: "Eliminar contenedor Portainer existente (si lo hay) en master"
       ansible.builtin.shell: |
-        if docker ps -a --format '{{.Names}}' | grep -q '^portainer$'; then
+        if docker ps -a --format '{{'{{'}}.Names{{'}}'}}' | grep -q '^portainer$'; then
           docker rm -f portainer
         fi
       when: "'pv_infra_master' in group_names"
 
-    - name: Crear volumen de datos para Portainer en master
+    - name: "Crear volumen de datos para Portainer en master"
       ansible.builtin.shell: |
         docker volume create portainer_data >/dev/null 2>&1 || true
       when: "'pv_infra_master' in group_names"
 
-    - name: Desplegar Portainer SERVER en master
+    - name: "Desplegar Portainer SERVER en master"
       ansible.builtin.shell: |
         docker run -d \
           --name portainer \
@@ -111,14 +111,14 @@
     #####################################################################
     # 5. Portainer AGENT en los nodos
     #####################################################################
-    - name: Eliminar contenedor Portainer Agent existente (si lo hay) en nodos
+    - name: "Eliminar contenedor Portainer Agent existente (si lo hay) en nodos"
       ansible.builtin.shell: |
-        if docker ps -a --format '{{.Names}}' | grep -q '^portainer_agent$'; then
+        if docker ps -a --format '{{'{{'}}.Names{{'}}'}}' | grep -q '^portainer_agent$'; then
           docker rm -f portainer_agent
         fi
       when: "'pv_infra_nodes' in group_names"
 
-    - name: Desplegar Portainer AGENT en nodos
+    - name: "Desplegar Portainer AGENT en nodos"
       ansible.builtin.shell: |
         docker run -d \
           --name portainer_agent \
