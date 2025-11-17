@@ -3,6 +3,11 @@
   hosts: docker_hosts
   become: true
 
+  vars:
+    infra_base_dir: "/srv/infra"
+    noc_base_dir: "/srv/noc"
+    soc_base_dir: "/srv/soc"
+
   tasks:
     - name: Comprobar si Docker ya está instalado
       ansible.builtin.command:
@@ -26,6 +31,9 @@
       ansible.builtin.apt:
         name:
           - apt-transport-https
+          - ca-certificates
+          - curl
+          - git
         state: present
       when: docker_check.rc != 0
 
@@ -41,6 +49,68 @@
         name: docker
         state: started
         enabled: true
+
+    # ------------------------------------------------------------------
+    # Estructura de directorios para bind-mounts según rol del host
+    # ------------------------------------------------------------------
+
+    # MASTER: iTop (mesa de ayuda) y estructura infra genérica
+    - name: Crear estructura bind-mount para servicios INFRA en pv-infra-master
+      ansible.builtin.file:
+        path: "{{ infra_base_dir }}/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - config
+        - data
+        - logs
+        - itop
+        - itop/config
+        - itop/data
+      when: inventory_hostname == "pv-infra-master"
+
+    # NOC: Prometheus, Grafana, Netdata, etc.
+    - name: Crear estructura bind-mount para NOC en pv-infra-noc
+      ansible.builtin.file:
+        path: "{{ noc_base_dir }}/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - config
+        - data
+        - logs
+        - prometheus
+        - prometheus/config
+        - prometheus/data
+        - grafana
+        - grafana/data
+        - netdata
+        - netdata/config
+      when: inventory_hostname == "pv-infra-noc"
+
+    # SOC: OpenCTI, Gophish, Wazuh, etc.
+    - name: Crear estructura bind-mount para SOC en pv-infra-soc
+      ansible.builtin.file:
+        path: "{{ soc_base_dir }}/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - config
+        - data
+        - logs
+        - opencti
+        - opencti/data
+        - gophish
+        - gophish/config
+        - wazuh
+        - wazuh/data
+      when: inventory_hostname == "pv-infra-soc"
 
 # ----------------------------------------------------------------------
 
