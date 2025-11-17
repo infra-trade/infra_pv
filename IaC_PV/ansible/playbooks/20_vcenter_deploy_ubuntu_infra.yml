@@ -48,7 +48,7 @@
         cluster: "{{ vcenter_cluster }}"
         folder: "{{ vm_folder }}"
         name: "{{ item.name }}"
-        state: poweredoff           # <-- IMPORTANTE: primero las dejamos apagadas
+        state: poweredoff           # Primero las dejamos apagadas
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
         hardware:
@@ -75,7 +75,7 @@
         cluster: "{{ vcenter_cluster }}"
         folder: "{{ vm_folder }}"
         name: "{{ item.name }}"
-        state: poweredon            # <-- Aquí solo encendemos, SIN tocar hardware
+        state: poweredon            # Aquí solo encendemos, sin tocar hardware
         wait_for_ip_address: false
       loop: "{{ infra_vms }}"
       delegate_to: localhost
@@ -113,7 +113,7 @@
   tasks:
     - name: Esperar a que SSH (puerto 22) esté disponible
       ansible.builtin.wait_for:
-        host: "{{ ansible_host | default(inventory_hostname) }}」
+        host: "{{ ansible_host | default(inventory_hostname) }}"
         port: 22
         delay: 10
         timeout: 600
