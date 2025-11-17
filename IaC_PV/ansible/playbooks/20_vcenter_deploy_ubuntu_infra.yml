@@ -2,34 +2,35 @@
 - name: Crear VMs de infraestructura en vCenter desde PV-INFRA-IaC
   hosts: localhost
   gather_facts: false
+  connection: local
 
+  # Cargamos credenciales y parámetros de vCenter desde el inventory de vcenter
   vars_files:
-    # Variables de conexión a vCenter (vault)
     - "../inventories/vcenter/group_vars/all/vcenter.yml"
 
   vars:
     infra_vms:
       - name: pv-infra-master
         ip: "192.168.5.85"
-        cpu: 3
-        memory_mb: 24576   # 24 GB
+        cpu: 3          # Por ahora NO se usan, pero los dejamos documentados
+        memory_mb: 24576
         disk_gb: 140
       - name: pv-infra-nodo1
         ip: "192.168.5.86"
         cpu: 2
-        memory_mb: 16384   # 16 GB
+        memory_mb: 16384
         disk_gb: 140
       - name: pv-infra-nodo2
         ip: "192.168.5.87"
         cpu: 2
-        memory_mb: 16384   # 16 GB
+        memory_mb: 16384
         disk_gb: 140
 
-    # Parámetros del template y entorno vSphere
-    vm_source_name: "PV-INFRA-IaC"                    # Nombre del template origen
-    vm_folder: "PV_IaC"                               # Carpeta en vCenter
-    vm_datastore: "PURESTORAGE_PV_X20R4_VOL_1"        # Datastore donde se crean las VMs
-    vm_network: "VLAN-5"                              # Portgroup / red
+    # Datos del template y entorno vSphere
+    vm_source_name: "PV-INFRA-IaC"            # Nombre del TEMPLATE en vCenter
+    vm_folder: "PV_IaC"
+    vm_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
+    vm_network: "VLAN-5"
     vm_netmask: "255.255.255.0"
     vm_gateway: "192.168.5.252"
     vm_dns_servers:
@@ -37,23 +38,23 @@
       - "8.8.8.8"
 
   tasks:
-
-    - name: Crear/actualizar VMs de infraestructura (con hardware) DEJÁNDOLAS APAGADAS
+    - name: Crear/actualizar VMs de infraestructura (clonar template) DEJÁNDOLAS APAGADAS
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+
         datacenter: "{{ vcenter_datacenter }}"
         cluster: "{{ vcenter_cluster }}"
         folder: "{{ vm_folder }}"
+
         name: "{{ item.name }}"
-        state: poweredoff           # Primero las dejamos apagadas
+        state: poweredoff          # Aseguramos que queden apagadas
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
-        hardware:
-          memory_mb: "{{ item.memory_mb }}"
-          num_cpus: "{{ item.cpu }}"
+
+        # IMPORTANTE: NO definimos 'hardware' aquí para evitar errores de cpuHotAdd/memoryHotAdd
         networks:
           - name: "{{ vm_network }}"
             type: static
@@ -61,21 +62,7 @@
             netmask: "{{ vm_netmask }}"
             gateway: "{{ vm_gateway }}"
             dns_servers: "{{ vm_dns_servers }}"
-        wait_for_ip_address: false
-      loop: "{{ infra_vms }}"
-      delegate_to: localhost
 
-    - name: Encender VMs de infraestructura
-      community.vmware.vmware_guest:
-        hostname: "{{ vcenter_hostname }}"
-        username: "{{ vcenter_username }}"
-        password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-        datacenter: "{{ vcenter_datacenter }}"
-        cluster: "{{ vcenter_cluster }}"
-        folder: "{{ vm_folder }}"
-        name: "{{ item.name }}"
-        state: poweredon            # Aquí solo encendemos, sin tocar hardware
         wait_for_ip_address: false
       loop: "{{ infra_vms }}"
       delegate_to: localhost
@@ -92,7 +79,7 @@
     - name: Mostrar resumen de VMs clonadas
       ansible.builtin.debug:
         msg: >-
-          VM {{ item.name }} clonada/actualizada desde {{ vm_source_name }}
+          VM {{ item.name }} clonada desde {{ vm_source_name }}
           en carpeta {{ vm_folder }}, datastore {{ vm_datastore }},
           IP {{ item.ip }} en {{ vm_network }}.
       loop: "{{ infra_vms }}"
