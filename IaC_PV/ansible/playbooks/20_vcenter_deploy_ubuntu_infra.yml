@@ -26,15 +26,16 @@
 
     # Configuración de red (ajusta gateway / DNS a tu entorno)
     vm_netmask: "255.255.255.0"
-    vm_gateway: "192.168.5.252"
+    vm_gateway: "192.168.5.1"
     vm_dns_servers:
-      - "192.168.10.2"
+      - "192.168.5.1"
 
-    # Definición de las VMs a crear (por ahora solo usamos el nombre y la IP)
+    # Definición de las VMs a crear (por ahora usamos SOLO nombre e IP;
+    # los valores de cpu/memory/disk_gb son informativos para futuras tareas)
     ubuntu_infra_vms:
       - name: "pv-infra-master"
         cpu: 3
-        memory_mb: 24576        # 24 GB RAM (se usará luego, no en este paso)
+        memory_mb: 24576        # 24 GB RAM (para futuro ajuste)
         disk_gb: 140
         ip: "192.168.5.85"
       - name: "pv-infra-nodo1"
@@ -65,12 +66,9 @@
         template: "{{ ubuntu_template }}"     # clonar desde la VM PV-INFRA-IaC
         state: poweredon
 
-        # De momento NO tocamos hardware (CPU/RAM) para evitar errores de hot-add
-
-        disk:
-          - size_gb: "{{ item.disk_gb }}"
-            type: thin
-            datastore: "{{ vcenter_datastore }}"
+        # IMPORTANTE:
+        # No definimos 'hardware' ni 'disk' para no cambiar CPU/RAM/disco
+        # durante el clonado (evita errores de hot-add y shrink de disco).
 
         # Configuración de red + IP estática en VLAN-5
         networks:
@@ -85,7 +83,7 @@
         # Customization para hostname/dominio/DNS
         customization:
           hostname: "{{ item.name }}"
-          domain: "popvalores.local"
+          domain: "pv.lab.local"
           dns_servers: "{{ vm_dns_servers }}"
 
         wait_for_ip_address: no
