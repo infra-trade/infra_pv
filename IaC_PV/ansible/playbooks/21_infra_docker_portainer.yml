@@ -1,5 +1,5 @@
 ---
-- name: Base de infraestructura: Docker, Portainer, NTP, herramientas de red
+- name: "Base de infraestructura: Docker, Portainer, NTP, herramientas de red"
   hosts: all
   become: true
   gather_facts: true
