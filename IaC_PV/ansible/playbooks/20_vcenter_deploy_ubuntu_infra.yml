@@ -2,126 +2,94 @@
 - name: Crear VMs de infraestructura en vCenter desde PV-INFRA-IaC
   hosts: localhost
   gather_facts: false
-  become: false
 
-  collections:
-    - community.vmware
+  vars_files:
+    - "../inventories/vcenter/group_vars/all/vcenter.yml"
 
   vars:
-    # Datos de vCenter (hostname/user/pass vienen del vault)
-    vcenter_datacenter: "POPULAR_VALORES"
-    vcenter_cluster: "PV-CLUSTER"
+    infra_vms:
+      - name: pv-infra-master
+        ip: "192.168.5.85"
+        cpu: 3
+        memory_mb: 24576   # 24 GB
+        disk_gb: 140
+      - name: pv-infra-nodo1
+        ip: "192.168.5.86"
+        cpu: 2
+        memory_mb: 16384   # 16 GB
+        disk_gb: 140
+      - name: pv-infra-nodo2
+        ip: "192.168.5.87"
+        cpu: 2
+        memory_mb: 16384   # 16 GB
+        disk_gb: 140
 
-    # Carpeta de VMs dentro del datacenter (debe existir)
-    vcenter_folder: "PV_IaC"
-
-    vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
-
-    # Portgroup / red donde estarán las VMs (VLAN-5)
-    vcenter_network: "VLAN-5"
-
-    # VM base desde la cual clonamos (no es plantilla formal, pero sirve)
-    ubuntu_template: "PV-INFRA-IaC"
-
-    # Red (ajusta gateway / DNS si aplica)
+    vm_source_name: "PV-INFRA-IaC"
+    vm_folder: "PV_IaC"
+    vm_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
+    vm_network: "VLAN-5"
     vm_netmask: "255.255.255.0"
     vm_gateway: "192.168.5.1"
     vm_dns_servers:
-      - "192.168.5.1"
-
-    # Definición de las VMs a crear
-    ubuntu_infra_vms:
-      - name: "pv-infra-master"
-        cpu: 3
-        memory_mb: 24576        # 24 GB RAM
-        disk_gb: 140
-        ip: "192.168.5.85"
-      - name: "pv-infra-nodo1"
-        cpu: 2
-        memory_mb: 16384        # 16 GB RAM
-        disk_gb: 140
-        ip: "192.168.5.86"
-      - name: "pv-infra-nodo2"
-        cpu: 2
-        memory_mb: 16384        # 16 GB RAM
-        disk_gb: 140
-        ip: "192.168.5.87"
+      - "192.168.5.10"
+      - "8.8.8.8"
 
   tasks:
-
     - name: Crear/actualizar VMs de infraestructura desde PV-INFRA-IaC
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
-        validate_certs: false
-
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
         datacenter: "{{ vcenter_datacenter }}"
         cluster: "{{ vcenter_cluster }}"
-        folder: "{{ vcenter_folder }}"
-
+        folder: "{{ vm_folder }}"
         name: "{{ item.name }}"
-        template: "{{ ubuntu_template }}"     # clonar desde la VM PV-INFRA-IaC
         state: poweredon
-
-        # No tocamos hardware ni disco para evitar errores de hot-add / shrink.
-        # (si quieres ajustar CPU/RAM más adelante, se puede hacer en otra tarea
-        #  específica de reconfiguración)
-
-        # Configuración de red + IP estática en VLAN-5
+        template: "{{ vm_source_name }}"
+        datastore: "{{ vm_datastore }}"
+        hardware:
+          memory_mb: "{{ item.memory_mb }}"
+          num_cpus: "{{ item.cpu }}"
         networks:
-          - name: "{{ vcenter_network }}"
-            start_connected: true
+          - name: "{{ vm_network }}"
             type: static
             ip: "{{ item.ip }}"
             netmask: "{{ vm_netmask }}"
             gateway: "{{ vm_gateway }}"
             dns_servers: "{{ vm_dns_servers }}"
-
-        # Customization para hostname/dominio/DNS
-        customization:
-          hostname: "{{ item.name }}"
-          domain: "pv.lab.local"
-          dns_servers: "{{ vm_dns_servers }}"
-
-        # Dejamos que el módulo espere a que VMware Tools vea una IP
-        wait_for_ip_address: yes
-      loop: "{{ ubuntu_infra_vms }}"
-      loop_control:
-        label: "{{ item.name }}"
+        wait_for_ip_address: false
+      loop: "{{ infra_vms }}"
       delegate_to: localhost
 
     - name: Registrar hosts clonados en inventario en memoria
-      add_host:
+      ansible.builtin.add_host:
         name: "{{ item.name }}"
+        groups:
+          - pv_infra_temp
         ansible_host: "{{ item.ip }}"
-        ansible_user: "pvinfra"   # usuario remoto dentro de las VMs
-        groups: pv_infra_temp
-      loop: "{{ ubuntu_infra_vms }}"
-      loop_control:
-        label: "{{ item.name }}"
+        ansible_user: "pvinfra"
+      loop: "{{ infra_vms }}"
 
     - name: Mostrar resumen de VMs clonadas
-      debug:
-        msg: >
-          VM {{ item.name }} clonada desde {{ ubuntu_template }} en carpeta {{ vcenter_folder }},
-          datastore {{ vcenter_datastore }}, IP {{ item.ip }} en {{ vcenter_network }}.
-      loop: "{{ ubuntu_infra_vms }}"
-      loop_control:
-        label: "{{ item.name }}"
+      ansible.builtin.debug:
+        msg: >-
+          VM {{ item.name }} clonada desde {{ vm_source_name }}
+          en carpeta {{ vm_folder }}, datastore {{ vm_datastore }},
+          IP {{ item.ip }} en {{ vm_network }}.
+      loop: "{{ infra_vms }}"
 
 # ======================================================================
-# Segundo play: esperar a que SSH esté arriba e instalar la llave SSH
+# Segundo play: instalar llave SSH y sudo sin contraseña en las VMs
 # ======================================================================
 - name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas
   hosts: pv_infra_temp
   gather_facts: false
-  remote_user: "pvinfra"    # usuario remoto
+  remote_user: "pvinfra"
   become: true
-  serial: 1                 # ir uno por uno para no saturar
+  serial: 1
 
   vars:
-    # Leemos la llave pública del controlador (PV-INFRA-IaC)
     ssh_public_key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_ed25519.pub') }}"
 
   tasks:
@@ -129,8 +97,8 @@
       ansible.builtin.wait_for:
         host: "{{ ansible_host | default(inventory_hostname) }}"
         port: 22
-        delay: 10          # espera inicial antes de empezar a probar
-        timeout: 600       # hasta 10 minutos si se tarda en boot/customize
+        delay: 10
+        timeout: 600
         state: started
       delegate_to: localhost
 
@@ -147,3 +115,18 @@
         user: "pvinfra"
         state: present
         key: "{{ ssh_public_key }}"
+
+    - name: Asegurar que el usuario pvinfra está en el grupo sudo
+      ansible.builtin.user:
+        name: "pvinfra"
+        groups: "sudo"
+        append: true
+
+    - name: Permitir sudo sin contraseña para pvinfra
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/99-pvinfra-nopasswd
+        content: "pvinfra ALL=(ALL) NOPASSWD:ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: "visudo -cf %s"
