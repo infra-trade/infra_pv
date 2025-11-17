@@ -1,7 +1,9 @@
 ---
 - name: "Base de infraestructura: Docker, Portainer, NTP, herramientas de red"
-  hosts: infra
+  hosts: "pv_infra_master:pv_infra_nodes"
   become: true
+  become_method: sudo
+  become_user: root
   gather_facts: true
 
   vars:
@@ -10,6 +12,10 @@
     ntp_service: "chrony"
 
   tasks:
+    - name: Mostrar host sobre el que se está trabajando
+      ansible.builtin.debug:
+        msg: "Configurando {{ inventory_hostname }} (ansible_host={{ ansible_host | default('desconocida') }}) en grupos {{ group_names }}"
+
     - name: Actualizar caché de APT
       ansible.builtin.apt:
         update_cache: true
@@ -56,10 +62,12 @@
         append: true
 
     # ----------------- Portainer Server en el master -------------------
-    - name: Crear volumen de datos para Portainer Server (master)
+    - name: Crear volumen de datos para Portainer Server (solo master)
       ansible.builtin.shell: |
         docker volume create portainer_data >/dev/null 2>&1 || true
-      when: inventory_hostname in groups['infra_master']
+      args:
+        warn: false
+      when: "'pv_infra_master' in group_names"
 
     - name: Desplegar/actualizar Portainer Server en el master
       ansible.builtin.shell: |
@@ -73,7 +81,9 @@
           -v /var/run/docker.sock:/var/run/docker.sock \
           -v portainer_data:/data \
           portainer/portainer-ce:latest
-      when: inventory_hostname in groups['infra_master']
+      args:
+        warn: false
+      when: "'pv_infra_master' in group_names"
 
     # ----------------- Portainer Agent en los nodos --------------------
     - name: Desplegar/actualizar Portainer Agent en nodos
@@ -87,4 +97,6 @@
           -v /var/run/docker.sock:/var/run/docker.sock \
           -v /var/lib/docker/volumes:/var/lib/docker/volumes \
           portainer/agent:latest
-      when: inventory_hostname in groups['infra_nodes']
+      args:
+        warn: false
+      when: "'pv_infra_nodes' in group_names"
