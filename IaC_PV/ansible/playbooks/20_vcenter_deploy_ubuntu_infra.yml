@@ -9,9 +9,9 @@
     - "../inventories/vcenter/group_vars/all/vcenter.yml"
 
   vars:
-    # ⚠️ Ajusta estos dos nombres al datacenter y cluster reales de tu vCenter
-    vcenter_datacenter: "PV-DATACENTER"    # EJEMPLO: "PVEN-CostaRica-DC"
-    vcenter_cluster: "PV-CLUSTER"          # EJEMPLO: "CLUSTER-PV-INFRA"
+    # ⚠️ CAMBIA ESTO POR LOS NOMBRES REALES QUE VES EN VCENTER
+    vcenter_datacenter: "TU_DATACENTER_EXACTO"
+    vcenter_cluster: "TU_CLUSTER_EXACTO"
 
     # Plantilla base desde donde se clonan las VMs
     vm_source_name: "PV-INFRA-IaC"
@@ -121,7 +121,6 @@
     - name: Esperar a que SSH (puerto 22) esté disponible
       ansible.builtin.wait_for:
         host: "{{ ansible_host | default(inventory_hostname) }}"
-
         port: 22
         delay: 10
         timeout: 600
