@@ -25,9 +25,9 @@
 
     # Red (ajusta gateway / DNS si aplica)
     vm_netmask: "255.255.255.0"
-    vm_gateway: "192.168.10.2"
+    vm_gateway: "192.168.5.1"
     vm_dns_servers:
-      - "192.168.10.2"
+      - "192.168.5.1"
 
     # Definición de las VMs a crear
     ubuntu_infra_vms:
@@ -79,7 +79,7 @@
         # Customization para hostname/dominio/DNS
         customization:
           hostname: "{{ item.name }}"
-          domain: "popvalores.local"
+          domain: "pv.lab.local"
           dns_servers: "{{ vm_dns_servers }}"
 
         wait_for_ip_address: no
@@ -92,6 +92,7 @@
       add_host:
         name: "{{ item.name }}"
         ansible_host: "{{ item.ip }}"
+        ansible_user: "pvinfra"   # <- usuario remoto explícito
         groups: pv_infra_temp
       loop: "{{ ubuntu_infra_vms }}"
       loop_control:
@@ -107,30 +108,29 @@
         label: "{{ item.name }}"
 
 # ======================================================================
-# Segundo play: instalar la llave SSH del nodo Ansible en las VMs nuevas
+# Segundo play: instalar la llave SSH del nodo PV-INFRA-IaC en las VMs
 # ======================================================================
 - name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas
   hosts: pv_infra_temp
   gather_facts: false
+  remote_user: "pvinfra"    # <- usuario remoto que usamos para conectar
   become: true
 
   vars:
-    # Usuario remoto (el que usas para entrar a las VMs; ajusta si no es pvinfra)
-    ssh_user: "{{ ansible_user | default(ansible_ssh_user) | default('pvinfra') }}"
     # Leemos la llave pública del controlador (PV-INFRA-IaC)
     ssh_public_key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_ed25519.pub') }}"
 
   tasks:
     - name: Crear carpeta .ssh si no existe
       ansible.builtin.file:
-        path: "/home/{{ ssh_user }}/.ssh"
+        path: "/home/pvinfra/.ssh"
         state: directory
-        owner: "{{ ssh_user }}"
-        group: "{{ ssh_user }}"
+        owner: "pvinfra"
+        group: "pvinfra"
         mode: "0700"
 
     - name: Autorizar llave pública del nodo Ansible
       ansible.builtin.authorized_key:
-        user: "{{ ssh_user }}"
+        user: "pvinfra"
         state: present
         key: "{{ ssh_public_key }}"
