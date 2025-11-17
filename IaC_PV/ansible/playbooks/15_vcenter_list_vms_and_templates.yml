@@ -7,22 +7,25 @@
   collections:
     - community.vmware
 
-  vars:
-    vcenter_datacenter: "POPULAR_VALORES"
-
   tasks:
-    - name: Obtener info de VMs/plantillas del datacenter
+    - name: Obtener info de VMs/plantillas en todo el vCenter
       community.vmware.vmware_vm_info:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
         validate_certs: false
-        datacenter: "{{ vcenter_datacenter }}"
+        show_datacenter: true
+        show_cluster: true
+        show_folder: true
       register: vm_info
 
-    - name: Mostrar nombres y si son plantilla
+    - name: Mostrar nombre, si es plantilla y datacenter/carpeta
       debug:
-        msg: "name={{ item.config.name }} template={{ item.config.template }}"
+        msg: >
+          name={{ item.config.name }}
+          template={{ item.config.template }}
+          datacenter={{ item.datacenter }}
+          folder={{ item.folder }}
       loop: "{{ vm_info.virtual_machines }}"
       loop_control:
         label: "{{ item.config.name }}"
