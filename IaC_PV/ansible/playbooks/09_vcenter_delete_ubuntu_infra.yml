@@ -1,0 +1,69 @@
+---
+- name: Eliminar VMs de infraestructura en vCenter (pv-infra-*)
+  hosts: localhost
+  gather_facts: false
+  become: false
+
+  collections:
+    - community.vmware
+
+  vars:
+    # Datos de vCenter (hostname/user/pass vienen del vault)
+    vcenter_datacenter: "POPULAR_VALORES"
+    vcenter_cluster: "PV-CLUSTER"
+
+    # Carpeta donde quedaron las VMs (la misma que usamos en el 20)
+    vcenter_folder: "PV_IaC"
+
+    # Lista de VMs de infraestructura a eliminar
+    ubuntu_infra_vms:
+      - "pv-infra-master"
+      - "pv-infra-nodo1"
+      - "pv-infra-nodo2"
+
+  tasks:
+
+    - name: Apagar VMs de infraestructura si están encendidas
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+
+        datacenter: "{{ vcenter_datacenter }}"
+        cluster: "{{ vcenter_cluster }}"
+        folder: "{{ vcenter_folder }}"
+
+        name: "{{ item }}"
+        state: poweredoff
+      loop: "{{ ubuntu_infra_vms }}"
+      loop_control:
+        label: "{{ item }}"
+      ignore_errors: true    # por si alguna VM ya no existe o ya está apagada
+      delegate_to: localhost
+
+    - name: Eliminar VMs de infraestructura
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+
+        datacenter: "{{ vcenter_datacenter }}"
+        cluster: "{{ vcenter_cluster }}"
+        folder: "{{ vcenter_folder }}"
+
+        name: "{{ item }}"
+        state: absent
+        force: true           # fuerza apagado/eliminación si aún estuviera encendida
+      loop: "{{ ubuntu_infra_vms }}"
+      loop_control:
+        label: "{{ item }}"
+      delegate_to: localhost
+
+    - name: Mostrar resumen de VMs eliminadas
+      debug:
+        msg: "VM {{ item }} eliminada (si existía) del datacenter {{ vcenter_datacenter }} / carpeta {{ vcenter_folder }}"
+      loop: "{{ ubuntu_infra_vms }}"
+      loop_control:
+        label: "{{ item }}"
