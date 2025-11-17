@@ -59,7 +59,7 @@
       ansible.builtin.user:
         name: "pvinfra"
         groups: "docker"
-        append: true1
+        append: true
 
     # ----------------- Portainer Server en el master -------------------
     - name: Crear volumen de datos para Portainer Server (solo master)
