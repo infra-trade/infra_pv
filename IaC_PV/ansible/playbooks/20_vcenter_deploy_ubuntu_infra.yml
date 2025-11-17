@@ -12,31 +12,28 @@
     vcenter_datacenter: "POPULAR_VALORES"
     vcenter_cluster: "PV-CLUSTER"
 
-    # Nombre de la carpeta de VMs dentro del datacenter
-    # Asegúrate de que exista la carpeta PV_IaC en el cliente vSphere
+    # Carpeta de VMs dentro del datacenter (debe existir)
     vcenter_folder: "PV_IaC"
 
     vcenter_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
 
-    # Nombre del portgroup / red donde estarán las VMs (VLAN-5)
+    # Portgroup / red donde estarán las VMs (VLAN-5)
     vcenter_network: "VLAN-5"
 
-    # Usaremos la VM existente PV-INFRA-IaC como "plantilla base" para clonar
+    # VM base desde la cual clonamos (no es plantilla formal, pero sirve)
     ubuntu_template: "PV-INFRA-IaC"
 
-    # Configuración de red (ajusta gateway / DNS a tu entorno)
+    # Red (ajusta gateway / DNS si aplica)
     vm_netmask: "255.255.255.0"
-    vm_gateway: "192.168.5.252"
+    vm_gateway: "192.168.10.2"
     vm_dns_servers:
       - "192.168.10.2"
-      - "192.168.10.50"
 
-    # Definición de las VMs a crear (por ahora usamos SOLO nombre e IP;
-    # los valores de cpu/memory/disk_gb son informativos para futuras tareas)
+    # Definición de las VMs a crear
     ubuntu_infra_vms:
       - name: "pv-infra-master"
         cpu: 3
-        memory_mb: 24576        # 24 GB RAM (para futuro ajuste)
+        memory_mb: 24576        # 24 GB RAM (para futuros ajustes)
         disk_gb: 140
         ip: "192.168.5.85"
       - name: "pv-infra-nodo1"
@@ -67,9 +64,7 @@
         template: "{{ ubuntu_template }}"     # clonar desde la VM PV-INFRA-IaC
         state: poweredon
 
-        # IMPORTANTE:
-        # No definimos 'hardware' ni 'disk' para no cambiar CPU/RAM/disco
-        # durante el clonado (evita errores de hot-add y shrink de disco).
+        # No tocamos hardware ni disco para evitar errores de hot-add / shrink.
 
         # Configuración de red + IP estática en VLAN-5
         networks:
@@ -93,7 +88,16 @@
         label: "{{ item.name }}"
       delegate_to: localhost
 
-    - name: Mostrar resumen de VMs creadas
+    - name: Registrar hosts clonados en inventario en memoria
+      add_host:
+        name: "{{ item.name }}"
+        ansible_host: "{{ item.ip }}"
+        groups: pv_infra_temp
+      loop: "{{ ubuntu_infra_vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Mostrar resumen de VMs clonadas
       debug:
         msg: >
           VM {{ item.name }} clonada desde {{ ubuntu_template }} en carpeta {{ vcenter_folder }},
@@ -101,3 +105,32 @@
       loop: "{{ ubuntu_infra_vms }}"
       loop_control:
         label: "{{ item.name }}"
+
+# ======================================================================
+# Segundo play: instalar la llave SSH del nodo Ansible en las VMs nuevas
+# ======================================================================
+- name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas
+  hosts: pv_infra_temp
+  gather_facts: false
+  become: true
+
+  vars:
+    # Usuario remoto (el que usas para entrar a las VMs; ajusta si no es pvinfra)
+    ssh_user: "{{ ansible_user | default(ansible_ssh_user) | default('pvinfra') }}"
+    # Leemos la llave pública del controlador (PV-INFRA-IaC)
+    ssh_public_key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_ed25519.pub') }}"
+
+  tasks:
+    - name: Crear carpeta .ssh si no existe
+      ansible.builtin.file:
+        path: "/home/{{ ssh_user }}/.ssh"
+        state: directory
+        owner: "{{ ssh_user }}"
+        group: "{{ ssh_user }}"
+        mode: "0700"
+
+    - name: Autorizar llave pública del nodo Ansible
+      ansible.builtin.authorized_key:
+        user: "{{ ssh_user }}"
+        state: present
+        key: "{{ ssh_public_key }}"
