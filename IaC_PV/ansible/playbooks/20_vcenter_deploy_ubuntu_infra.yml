@@ -9,10 +9,15 @@
     - "../inventories/vcenter/group_vars/all/vcenter.yml"
 
   vars:
+    # Usuario SSH con el que nos vamos a conectar a las VMs recién clonadas
+    # Si luego ves que el usuario real del template es otro (ubuntu, cloud-user, etc),
+    # cámbialo aquí.
+    infra_ssh_user: "pvinfra"
+
     infra_vms:
       - name: pv-infra-master
         ip: "192.168.5.85"
-        cpu: 3          # Documentativo, ya no lo tocamos desde Ansible
+        cpu: 3          # Solo informativo, no cambiamos CPU/RAM desde Ansible
         memory_mb: 24576
         disk_gb: 140
       - name: pv-infra-nodo1
@@ -50,7 +55,7 @@
         folder: "{{ vm_folder }}"
 
         name: "{{ item.name }}"
-        state: poweredon          # <--- ANTES estaba poweredoff
+        state: poweredon
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
 
@@ -73,7 +78,9 @@
         groups:
           - pv_infra_temp
         ansible_host: "{{ item.ip }}"
-        ansible_user: "pvinfra"
+        ansible_user: "{{ infra_ssh_user }}"
+        # Desactiva comprobación estricta de host key para evitar problemas
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
       loop: "{{ infra_vms }}"
 
     - name: Mostrar resumen de VMs clonadas
@@ -82,7 +89,6 @@
           VM {{ item.name }} clonada desde {{ vm_source_name }}
           en carpeta {{ vm_folder }}, datastore {{ vm_datastore }},
           IP {{ item.ip }} en {{ vm_network }}.
-
       loop: "{{ infra_vms }}"
 
 # ======================================================================
@@ -91,7 +97,7 @@
 - name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas
   hosts: pv_infra_temp
   gather_facts: false
-  remote_user: "pvinfra"
+  remote_user: "{{ infra_ssh_user }}"
   become: true
   serial: 1
 
@@ -103,35 +109,35 @@
       ansible.builtin.wait_for:
         host: "{{ ansible_host | default(inventory_hostname) }}"
         port: 22
-        delay: 10
+        delay: 15
         timeout: 600
         state: started
       delegate_to: localhost
 
     - name: Crear carpeta .ssh si no existe
       ansible.builtin.file:
-        path: "/home/pvinfra/.ssh"
+        path: "/home/{{ infra_ssh_user }}/.ssh"
         state: directory
-        owner: "pvinfra"
-        group: "pvinfra"
+        owner: "{{ infra_ssh_user }}"
+        group: "{{ infra_ssh_user }}"
         mode: "0700"
 
     - name: Autorizar llave pública del nodo Ansible
       ansible.posix.authorized_key:
-        user: "pvinfra"
+        user: "{{ infra_ssh_user }}"
         state: present
         key: "{{ ssh_public_key }}"
 
-    - name: Asegurar que el usuario pvinfra está en el grupo sudo
+    - name: Asegurar que el usuario {{ infra_ssh_user }} está en el grupo sudo
       ansible.builtin.user:
-        name: "pvinfra"
+        name: "{{ infra_ssh_user }}"
         groups: "sudo"
         append: true
 
-    - name: Permitir sudo sin contraseña para pvinfra
+    - name: Permitir sudo sin contraseña para {{ infra_ssh_user }}
       ansible.builtin.copy:
-        dest: /etc/sudoers.d/99-pvinfra-nopasswd
-        content: "pvinfra ALL=(ALL) NOPASSWD:ALL\n"
+        dest: /etc/sudoers.d/99-{{ infra_ssh_user }}-nopasswd
+        content: "{{ infra_ssh_user }} ALL=(ALL) NOPASSWD:ALL\n"
         owner: root
         group: root
         mode: "0440"
