@@ -1,0 +1,141 @@
+---
+- name: 22 - Replicar docker-compose desde IaC_PV hacia nodos infra (CD/CI simple)
+  hosts:
+    - pv-infra-master
+    - pv-infra-noc
+    - pv-infra-soc
+  become: true
+
+  vars:
+    # Mapeo IP -> rol
+    infra_roles_by_ip:
+      "192.168.5.85": "master"
+      "192.168.5.86": "noc"
+      "192.168.5.87": "soc"
+
+    # Carpeta local en el nodo Ansible donde tienes los docker-compose
+    # /home/pvinfra/infra_pv/IaC_PV/replication/{master|noc|soc}/docker-compose.yml
+    local_replication_base: "/home/pvinfra/infra_pv/IaC_PV/replication"
+
+    # Carpeta remota en cada VM donde se montarán los stacks
+    # /opt/stacks/{master|noc|soc}
+    remote_stacks_base: "/opt/stacks"
+
+  tasks:
+    # -------------------------------------------------------------------
+    # 1. Determinar el rol de cada host según su IP
+    # -------------------------------------------------------------------
+    - name: Determinar rol de este host según su IP
+      ansible.builtin.set_fact:
+        infra_role: "{{ infra_roles_by_ip.get(ansible_default_ipv4.address, 'unknown') }}"
+
+    - name: Mostrar rol detectado para este host
+      ansible.builtin.debug:
+        msg: "Host {{ inventory_hostname }} ({{ ansible_default_ipv4.address }}) => rol {{ infra_role }}"
+
+    # -------------------------------------------------------------------
+    # 2. Crear estructura de directorios /opt/stacks/{master,noc,soc}
+    # -------------------------------------------------------------------
+    - name: Crear directorio base para stacks
+      ansible.builtin.file:
+        path: "{{ remote_stacks_base }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Crear subdirectorios master, noc y soc en cada VM
+      ansible.builtin.file:
+        path: "{{ remote_stacks_base }}/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - master
+        - noc
+        - soc
+
+    # -------------------------------------------------------------------
+    # 3. Seleccionar y copiar docker-compose.yml según el rol
+    # -------------------------------------------------------------------
+    - name: Definir ruta local del docker-compose a replicar para este rol
+      ansible.builtin.set_fact:
+        local_compose_path: "{{ local_replication_base }}/{{ infra_role }}/docker-compose.yml"
+        remote_stack_dir: "{{ remote_stacks_base }}/{{ infra_role }}"
+
+    - name: Comprobar que existe el docker-compose local para este rol
+      ansible.builtin.stat:
+        path: "{{ local_compose_path }}"
+      delegate_to: localhost
+      run_once: false
+      register: local_compose_stat
+
+    - name: Fallar si no existe el docker-compose local para este rol
+      ansible.builtin.fail:
+        msg: "No se encontró {{ local_compose_path }} en el nodo Ansible para el rol {{ infra_role }}."
+      when: not local_compose_stat.stat.exists
+
+    - name: Copiar docker-compose.yml correspondiente al rol
+      ansible.builtin.copy:
+        src: "{{ local_compose_path }}"
+        dest: "{{ remote_stack_dir }}/docker-compose.yml"
+        owner: root
+        group: root
+        mode: "0644"
+
+    # -------------------------------------------------------------------
+    # 4. Detectar qué comando de compose está disponible en cada host
+    # -------------------------------------------------------------------
+    - name: Detectar 'docker compose' (plugin v2)
+      ansible.builtin.command: docker compose version
+      register: docker_compose_v2
+      changed_when: false
+      failed_when: false
+
+    - name: Detectar 'docker-compose' (binario v1)
+      ansible.builtin.command: docker-compose --version
+      register: docker_compose_v1
+      changed_when: false
+      failed_when: false
+
+    - name: Definir comando compose preferido para este host
+      ansible.builtin.set_fact:
+        compose_cmd: >-
+          {% if docker_compose_v2.rc == 0 -%}
+          docker compose
+          {%- elif docker_compose_v1.rc == 0 -%}
+          docker-compose
+          {%- else -%}
+          
+          {%- endif %}
+
+    - name: Mostrar comando compose que se usará
+      ansible.builtin.debug:
+        msg: "En {{ inventory_hostname }} se usará: '{{ compose_cmd | default('NINGUNO') | trim }}'"
+
+    - name: Fallar si no hay ningún comando compose disponible
+      ansible.builtin.fail:
+        msg: "Ni 'docker compose' ni 'docker-compose' están disponibles en {{ inventory_hostname }}. Ejecuta antes el play 21 para instalar Docker y docker-compose."
+      when: compose_cmd | trim == ''
+
+    # -------------------------------------------------------------------
+    # 5. Levantar el stack con el comando compose detectado
+    # -------------------------------------------------------------------
+    - name: Levantar stack con compose (pull + up -d)
+      ansible.builtin.shell: |
+        set -e
+        cd "{{ remote_stack_dir }}"
+        {{ compose_cmd }} pull
+        {{ compose_cmd }} up -d
+      args:
+        executable: /bin/bash
+      register: compose_up_result
+
+    - name: Mostrar salida de compose (stdout)
+      ansible.builtin.debug:
+        var: compose_up_result.stdout_lines
+
+    - name: Mostrar salida de compose (stderr)
+      ansible.builtin.debug:
+        var: compose_up_result.stderr_lines

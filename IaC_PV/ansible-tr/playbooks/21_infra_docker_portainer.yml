@@ -1,0 +1,156 @@
+---
+- name: 21 - Instalar y habilitar Docker + docker-compose en todos los hosts
+  hosts: docker_hosts
+  become: true
+
+  vars:
+    # Paquetes Docker principales
+    docker_base_packages:
+      - docker.io
+      - docker-compose
+
+  tasks:
+    - name: Actualizar cache de paquetes APT
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Instalar Docker y docker-compose (binario v1)
+      ansible.builtin.apt:
+        name: "{{ docker_base_packages }}"
+        state: present
+
+    - name: Intentar instalar docker-compose-plugin (para 'docker compose' v2, si existe en el repo)
+      ansible.builtin.apt:
+        name: docker-compose-plugin
+        state: present
+      failed_when: false
+
+    - name: Asegurar que el grupo docker existe
+      ansible.builtin.group:
+        name: docker
+        state: present
+
+    - name: Agregar usuario pvinfra al grupo docker
+      ansible.builtin.user:
+        name: pvinfra
+        groups: docker
+        append: true
+
+    - name: Habilitar y arrancar servicio Docker
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Comprobar versión de Docker instalada
+      ansible.builtin.command:
+        cmd: docker --version
+      register: docker_version
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar versión de Docker en el host
+      ansible.builtin.debug:
+        msg: "Docker en {{ inventory_hostname }} => {{ docker_version.stdout | default('no disponible') }}"
+
+    - name: Comprobar si 'docker compose' (plugin v2) está disponible
+      ansible.builtin.command: docker compose version
+      register: docker_compose_v2
+      changed_when: false
+      failed_when: false
+
+    - name: Comprobar si 'docker-compose' (binario v1) está disponible
+      ansible.builtin.command: docker-compose --version
+      register: docker_compose_v1
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar comandos docker-compose disponibles
+      ansible.builtin.debug:
+        msg: >
+          En {{ inventory_hostname }}:
+          docker compose rc={{ docker_compose_v2.rc }},
+          docker-compose rc={{ docker_compose_v1.rc }}
+
+# ----------------------------------------------------------------------
+
+- name: 21 - Desplegar Portainer Server en pv-infra-master
+  hosts: portainer_server
+  become: true
+
+  tasks:
+    - name: Crear volumen de datos para Portainer (Server)
+      ansible.builtin.command:
+        cmd: docker volume create portainer_data
+      register: portainer_volume
+      changed_when: "'portainer_data' in portainer_volume.stdout"
+
+    - name: Eliminar contenedor Portainer existente (si lo hay)
+      ansible.builtin.command:
+        cmd: docker rm -f portainer
+      register: remove_portainer_result
+      failed_when: false
+      changed_when: remove_portainer_result.rc == 0
+
+    - name: Descargar imagen portainer/portainer-ce:latest con reintentos
+      ansible.builtin.command:
+        cmd: docker pull portainer/portainer-ce:latest
+      register: pull_portainer_result
+      retries: 3
+      delay: 10
+      until: pull_portainer_result.rc == 0
+      failed_when: pull_portainer_result.rc != 0
+
+    - name: Desplegar contenedor Portainer Server
+      ansible.builtin.command: >
+        docker run -d
+        -p 9443:9443
+        --name portainer
+        --restart=always
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v portainer_data:/data
+        portainer/portainer-ce:latest
+      register: run_portainer_result
+      changed_when: run_portainer_result.rc == 0
+
+# ----------------------------------------------------------------------
+
+- name: 21 - Desplegar Portainer Agent en nodos
+  hosts: portainer_agents
+  become: true
+
+  tasks:
+    - name: Crear volumen de datos para Portainer Agent
+      ansible.builtin.command:
+        cmd: docker volume create portainer_agent_data
+      register: portainer_agent_volume
+      changed_when: "'portainer_agent_data' in portainer_agent_volume.stdout"
+
+    - name: Eliminar contenedor Portainer Agent existente (si lo hay)
+      ansible.builtin.command:
+        cmd: docker rm -f portainer_agent
+      register: remove_agent_result
+      failed_when: false
+      changed_when: remove_agent_result.rc == 0
+
+    - name: Descargar imagen portainer/agent:latest con reintentos
+      ansible.builtin.command:
+        cmd: docker pull portainer/agent:latest
+      register: pull_agent_result
+      retries: 3
+      delay: 10
+      until: pull_agent_result.rc == 0
+      failed_when: pull_agent_result.rc != 0
+
+    - name: Desplegar contenedor Portainer Agent
+      ansible.builtin.command: >
+        docker run -d
+        --name portainer_agent
+        --restart=always
+        -p 9001:9001
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /var/lib/docker/volumes:/var/lib/docker/volumes
+        portainer/agent:latest
+      register: run_agent_result
+      changed_when: run_agent_result.rc == 0

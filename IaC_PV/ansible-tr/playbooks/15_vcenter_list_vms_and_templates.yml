@@ -1,0 +1,31 @@
+---
+- name: Listar VMs y posibles plantillas en vCenter
+  hosts: localhost
+  gather_facts: false
+  become: false
+
+  collections:
+    - community.vmware
+
+  tasks:
+    - name: Obtener info de VMs/plantillas en todo el vCenter
+      community.vmware.vmware_vm_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        show_datacenter: true
+        show_cluster: true
+        show_folder: true
+      register: vm_info
+
+    - name: Mostrar nombre, SO invitado, datacenter y carpeta
+      debug:
+        msg: >
+          name={{ item.guest_name }}
+          guest_fullname={{ item.guest_fullname }}
+          datacenter={{ item.datacenter }}
+          folder={{ item.folder }}
+      loop: "{{ vm_info.virtual_machines }}"
+      loop_control:
+        label: "{{ item.guest_name }}"
