@@ -1,0 +1,86 @@
+---
+- name: 22 - Sincronizar carpeta de replicación (CD/CI simple) y recargar stacks Docker
+  hosts: docker_hosts
+  become: true
+  gather_facts: false
+
+  vars:
+    # Carpeta base en el nodo Ansible donde editas con VSCode
+    replication_src_base: "/home/pvinfra/infra_pv/IaC_PV/replication"
+
+  tasks:
+    - name: Verificar que la subcarpeta de replicación está definida para el host
+      ansible.builtin.assert:
+        that:
+          - replication_subdir is defined
+          - replication_dest is defined
+        fail_msg: >-
+          Falta definir replication_subdir o replication_dest para {{ inventory_hostname }}
+          en ansible/inventories/infra/hosts.yml
+
+    - name: Crear carpeta destino en el host (si no existe)
+      ansible.builtin.file:
+        path: "{{ replication_dest }}"
+        state: directory
+        owner: "{{ ansible_user | default('pvinfra') }}"
+        group: "{{ ansible_user | default('pvinfra') }}"
+        mode: "0755"
+
+    - name: Sincronizar contenidos desde el repo al host (rsync)
+      ansible.builtin.synchronize:
+        src: "{{ replication_src_base }}/{{ replication_subdir }}/"
+        dest: "{{ replication_dest }}/"
+        delete: true          # borra archivos que ya no existan en el repo
+        recursive: true
+        archive: true
+      delegate_to: localhost
+
+    - name: Mostrar qué ruta se ha sincronizado en el host
+      ansible.builtin.debug:
+        msg: >-
+          Host {{ inventory_hostname }}:
+          sincronizado {{ replication_src_base }}/{{ replication_subdir }}/
+          -> {{ replication_dest }}/
+
+    # ------------------------------------------------------------------
+    # Sección "CD/CI": relanzar docker compose después de sincronizar
+    # ------------------------------------------------------------------
+
+    - name: Verificar que existe carpeta de docker compose en el host
+      ansible.builtin.stat:
+        path: "{{ replication_compose_dir | default(replication_dest) }}"
+      register: compose_dir_stat
+
+    - name: Avisar si la carpeta de docker compose no existe
+      ansible.builtin.debug:
+        msg: >-
+          ATENCIÓN: no existe la carpeta {{ replication_compose_dir | default(replication_dest) }}
+          en {{ inventory_hostname }}. No se ejecutará docker compose.
+      when: not compose_dir_stat.stat.exists
+
+    - name: Ejecutar "docker compose pull" en la carpeta del stack
+      ansible.builtin.command: docker compose pull
+      args:
+        chdir: "{{ replication_compose_dir | default(replication_dest) }}"
+      when: compose_dir_stat.stat.exists
+      register: compose_pull_result
+      changed_when: "'Downloaded' in compose_pull_result.stdout
+                     or 'Pulling' in compose_pull_result.stdout
+                     or compose_pull_result.rc == 0"
+
+    - name: Ejecutar "docker compose up -d" en la carpeta del stack
+      ansible.builtin.command: docker compose up -d
+      args:
+        chdir: "{{ replication_compose_dir | default(replication_dest) }}"
+      when: compose_dir_stat.stat.exists
+      register: compose_up_result
+      changed_when: compose_up_result.rc == 0
+
+    - name: Mostrar resumen de actualización del stack Docker
+      ansible.builtin.debug:
+        msg: >-
+          Host {{ inventory_hostname }}:
+          docker compose ejecutado en {{ replication_compose_dir | default(replication_dest) }}.
+          Resultado pull: rc={{ compose_pull_result.rc | default('n/a') }},
+          resultado up: rc={{ compose_up_result.rc | default('n/a') }}.
+      when: compose_dir_stat.stat.exists
