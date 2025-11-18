@@ -3,20 +3,6 @@
   hosts: docker_hosts
   become: true
 
-  # ===========================
-  # PRE-TAREAS: GIT PULL
-  # ===========================
-  pre_tasks:
-    - name: Actualizar repo IaC_PV desde Git (git pull en el nodo Ansible)
-      ansible.builtin.git:
-        repo: "https://github.com/TU_USUARIO/TU_REPO.git"   # <-- AJUSTA ESTO
-        dest: "{{ playbook_dir | dirname | dirname }}"      # /home/pvinfra/infra_pv/IaC_PV
-        version: main                                       # rama a usar (main/master)
-        update: yes
-      delegate_to: localhost
-      run_once: true
-      become: false
-
   vars:
     # Mapear rol por IP (NO por nombre)
     infra_role_by_ip:
@@ -89,45 +75,13 @@
         mode: "0644"
 
     # ------------------------------------------------------------------
-    # Detectar comando docker compose disponible
-    # ------------------------------------------------------------------
-    - name: Detectar si 'docker compose' (plugin v2) está disponible
-      ansible.builtin.command: docker compose version
-      register: docker_compose_v2
-      changed_when: false
-      failed_when: false
-
-    - name: Detectar si 'docker-compose' (binario v1) está disponible
-      ansible.builtin.command: docker-compose --version
-      register: docker_compose_v1
-      changed_when: false
-      failed_when: false
-
-    - name: Definir comando base para docker compose
-      ansible.builtin.set_fact:
-        docker_compose_cmd: >-
-          {{ 'docker compose'
-             if docker_compose_v2.rc == 0
-             else ('docker-compose'
-                   if docker_compose_v1.rc == 0
-                   else 'docker compose') }}
-
-    - name: Fallar si no hay ningún comando docker compose disponible
-      ansible.builtin.fail:
-        msg: >-
-          No se encontró ni 'docker compose' ni 'docker-compose' en {{ inventory_hostname }}.
-          Instala el plugin docker-compose (docker-compose-plugin) o el paquete docker-compose.
-      when: docker_compose_v2.rc != 0 and docker_compose_v1.rc != 0
-
-    # ------------------------------------------------------------------
     # Desplegar / actualizar stack con docker compose
     # ------------------------------------------------------------------
     - name: Levantar stack con docker compose (pull + up -d)
       ansible.builtin.shell: |
         set -e
         cd "{{ base_remote_dir }}/{{ infra_role }}"
-        {{ docker_compose_cmd }} pull
-        {{ docker_compose_cmd }} up -d
+        docker compose pull
+        docker compose up -d
       args:
         executable: /bin/bash
-      when: docker_compose_v2.rc == 0 or docker_compose_v1.rc == 0
