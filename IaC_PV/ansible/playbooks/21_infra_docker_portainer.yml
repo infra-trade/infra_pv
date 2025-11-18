@@ -1,46 +1,77 @@
 ---
-- name: 21 - Instalar y habilitar Docker en todos los hosts
+- name: 21 - Instalar y habilitar Docker + docker-compose en todos los hosts
   hosts: docker_hosts
   become: true
 
+  vars:
+    # Paquetes Docker principales
+    docker_base_packages:
+      - docker.io
+      - docker-compose
+
   tasks:
-    - name: Comprobar si Docker ya está instalado
-      ansible.builtin.command:
-        cmd: docker --version
-      register: docker_check
-      failed_when: false
-      changed_when: false
-
-    - name: Mostrar estado actual de Docker en el host
-      ansible.builtin.debug:
-        msg: "Docker ya está instalado en {{ inventory_hostname }} (salida: {{ docker_check.stdout }})"
-      when: docker_check.rc == 0
-
-    - name: Actualizar cache de paquetes APT (solo si falta Docker)
+    - name: Actualizar cache de paquetes APT
       ansible.builtin.apt:
         update_cache: yes
         cache_valid_time: 3600
-      when: docker_check.rc != 0
 
-    - name: Instalar dependencias base para Docker (solo si falta Docker)
+    - name: Instalar Docker y docker-compose (binario v1)
       ansible.builtin.apt:
-        name:
-          - apt-transport-https
+        name: "{{ docker_base_packages }}"
         state: present
-      when: docker_check.rc != 0
 
-    - name: Instalar Docker desde los repos de Ubuntu (docker.io) si no está instalado
+    - name: Intentar instalar docker-compose-plugin (para 'docker compose' v2, si existe en el repo)
       ansible.builtin.apt:
-        name:
-          - docker.io
+        name: docker-compose-plugin
         state: present
-      when: docker_check.rc != 0
+      failed_when: false
+
+    - name: Asegurar que el grupo docker existe
+      ansible.builtin.group:
+        name: docker
+        state: present
+
+    - name: Agregar usuario pvinfra al grupo docker
+      ansible.builtin.user:
+        name: pvinfra
+        groups: docker
+        append: true
 
     - name: Habilitar y arrancar servicio Docker
       ansible.builtin.systemd:
         name: docker
         state: started
         enabled: true
+
+    - name: Comprobar versión de Docker instalada
+      ansible.builtin.command:
+        cmd: docker --version
+      register: docker_version
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar versión de Docker en el host
+      ansible.builtin.debug:
+        msg: "Docker en {{ inventory_hostname }} => {{ docker_version.stdout | default('no disponible') }}"
+
+    - name: Comprobar si 'docker compose' (plugin v2) está disponible
+      ansible.builtin.command: docker compose version
+      register: docker_compose_v2
+      changed_when: false
+      failed_when: false
+
+    - name: Comprobar si 'docker-compose' (binario v1) está disponible
+      ansible.builtin.command: docker-compose --version
+      register: docker_compose_v1
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar comandos docker-compose disponibles
+      ansible.builtin.debug:
+        msg: >
+          En {{ inventory_hostname }}:
+          docker compose rc={{ docker_compose_v2.rc }},
+          docker-compose rc={{ docker_compose_v1.rc }}
 
 # ----------------------------------------------------------------------
 
