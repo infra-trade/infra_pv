@@ -1,9 +1,191 @@
-version: "3.8"
+version: "3.9"
+
+networks:
+  soc_net:
+    driver: bridge
+
+volumes:
+  # OpenCTI
+  opencti_esdata:
+  opencti_minio_data:
+  opencti_minio_config:
+
+  # Wazuh
+  wazuh_indexer_data:
+  wazuh_manager_data:
+  wazuh_dashboard_data:
 
 services:
-  noc-hello:
-    image: nginx:alpine
-    container_name: noc-hello
-    restart: unless-stopped
+  ###########################################################################
+  # OPENCTI STACK
+  ###########################################################################
+  opencti-elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.2
+    container_name: opencti-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - opencti_esdata:/usr/share/elasticsearch/data
+    networks:
+      - soc_net
+
+  opencti-redis:
+    image: redis:7-alpine
+    container_name: opencti-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    networks:
+      - soc_net
+
+  opencti-minio:
+    image: minio/minio:latest
+    container_name: opencti-minio
+    environment:
+      - MINIO_ROOT_USER=opencti
+      - MINIO_ROOT_PASSWORD=opencti_password
+    command: server /data
+    volumes:
+      - opencti_minio_data:/data
+      - opencti_minio_config:/root/.minio
     ports:
-      - "8081:80"
+      # Opcional: consola de MinIO
+      - "19000:9000"
+    networks:
+      - soc_net
+
+  opencti-rabbitmq:
+    image: rabbitmq:3-management
+    container_name: opencti-rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=opencti
+      - RABBITMQ_DEFAULT_PASS=opencti_password
+      - RABBITMQ_DEFAULT_VHOST=/
+    ports:
+      # Opcional: consola de RabbitMQ
+      - "15672:15672"
+    networks:
+      - soc_net
+
+  opencti:
+    image: opencti/platform:latest
+    container_name: opencti
+    depends_on:
+      - opencti-elasticsearch
+      - opencti-redis
+      - opencti-minio
+      - opencti-rabbitmq
+    environment:
+      # Parámetros básicos de la app
+      - APP__PORT=8080
+      - APP__BASE_URL=http://192.168.5.87:8081
+      - APP__ADMIN_EMAIL=admin@local
+      - APP__ADMIN_PASSWORD=S0p0rt3..
+      - APP__ADMIN_TOKEN=B6nmuOtlLlwFIKQrlg4TxtmwUdBCZAIq
+      - APP__LOGS_LEVEL=info
+
+      # Elasticsearch
+      - ELASTICSEARCH__URL=http://opencti-elasticsearch:9200
+
+      # Redis
+      - REDIS__HOST=opencti-redis
+      - REDIS__PORT=6379
+
+      # MinIO
+      - MINIO__ENDPOINT=opencti-minio
+      - MINIO__PORT=9000
+      - MINIO__USE_SSL=false
+      - MINIO__ACCESS_KEY=opencti
+      - MINIO__SECRET_KEY=S0p0rt3..
+      - MINIO__BUCKET=opencti
+      - MINIO__PREFIX=storage
+
+      # RabbitMQ
+      - RABBITMQ__HOSTNAME=opencti-rabbitmq
+      - RABBITMQ__PORT=5672
+      - RABBITMQ__PORT_MANAGEMENT=15672
+      - RABBITMQ__USERNAME=opencti
+      - RABBITMQ__PASSWORD=S0p0rt3..
+      - RABBITMQ__VHOST=/
+
+      # NodeJS
+      - NODE_OPTIONS=--max_old_space_size=4096
+    ports:
+      # Acceso OpenCTI desde tu LAN:
+      # http://192.168.5.87:8081
+      - "8081:8080"
+    networks:
+      - soc_net
+
+  ###########################################################################
+  # WAZUH STACK (LAB SIMPLE)
+  ###########################################################################
+  wazuh-indexer:
+    image: wazuh/wazuh-indexer:4.9.0
+    container_name: wazuh-indexer
+    environment:
+      - discovery.type=single-node
+      - cluster.name=wazuh
+      - node.name=wazuh-indexer
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - wazuh_indexer_data:/usr/share/elasticsearch/data
+    ports:
+      # API/Indexador (solo si lo necesitas directamente)
+      - "9200:9200"
+    networks:
+      - soc_net
+
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.9.0
+    container_name: wazuh-manager
+    environment:
+      - INDEXER_URL=https://wazuh-indexer:9200
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=S0p0rt3..
+      - FILEBEAT_SSL_VERIFICATION_MODE=none
+      - API_USERNAME=wazuh
+      - API_PASSWORD=S0p0rt3..
+    depends_on:
+      - wazuh-indexer
+    volumes:
+      - wazuh_manager_data:/var/ossec/data
+    ports:
+      # Puertos para agentes
+      - "1514:1514/udp"
+      - "1515:1515/tcp"
+      - "55000:55000/tcp"
+    networks:
+      - soc_net
+
+  wazuh-dashboard:
+    image: wazuh/wazuh-dashboard:4.9.0
+    container_name: wazuh-dashboard
+    depends_on:
+      - wazuh-manager
+      - wazuh-indexer
+    environment:
+      - INDEXER_URL=https://wazuh-indexer:9200
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=S0p0rt3..
+      - WAZUH_API_URL=https://wazuh-manager
+      - WAZUH_API_PORT=55000
+      - WAZUH_API_USERNAME=wazuh
+      - WAZUH_API_PASSWORD=S0p0rt3..
+      - DASHBOARD_USERNAME=admin
+      - DASHBOARD_PASSWORD=S0p0rt3..
+      - SSL_VERIFICATION_MODE=none
+    ports:
+      # Acceso Wazuh Dashboard:
+      # https://192.168.5.87:8443 (certificado autofirmado)
+      - "8443:5601"
+    networks:
+      - soc_net
