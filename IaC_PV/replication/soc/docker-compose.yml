@@ -1,73 +1,62 @@
-version: "3.8"
+version: "3.9"
 
 services:
-  opencti:
-    image: opencti/platform:latest
-    container_name: opencti
-    restart: always
-    depends_on:
-      - redis
-      - opensearch
-      - minio
-      - rabbitmq
-    environment:
-      # URL de la plataforma
-      - APP__PORT=8080
-      - APP__BASE_URL=http://192.168.5.87:8080
-
-      # Usuario admin inicial
-      - APP__ADMIN__EMAIL=admin@local.com
-      - APP__ADMIN__PASSWORD=S0p0rt3..
-      - APP__ADMIN__TOKEN=qXvhxP0cnlWN5sn3sMUt8wmfbaaWX6Uw
-
-      # Conexión a Redis
-      - REDIS__HOST=redis
-      - REDIS__PORT=6379
-
-      # Conexión al motor de búsqueda (OpenSearch)
-      - SEARCH__ENGINE_ID=opensearch
-      - SEARCH__ENGINE__URL=http://opensearch:9200
-
-      # MinIO (storage)
-      - MINIO__ENDPOINT=minio
-      - MINIO__PORT=9000
-      - MINIO__USE_SSL=false
-      - MINIO__ACCESS_KEY=opencti
-      - MINIO__SECRET_KEY=S0p0rt3..
-      - MINIO__BUCKET=opencti-bucket
-
-      # RabbitMQ (mensajería)
-      - RABBITMQ__HOST=rabbitmq
-      - RABBITMQ__PORT=5672
-      - RABBITMQ__PORT_MANAGEMENT=15672
-      - RABBITMQ__USERNAME=opencti
-      - RABBITMQ__PASSWORD=S0p0rt3..
-
-      # Memoria Node
-      - NODE_OPTIONS=--max-old-space-size=4096
-
-    ports:
-      - "8080:8080"
-    networks:
-      - opencti-net
-
-  redis:
+  # -----------------------------
+  # Redis
+  # -----------------------------
+  opencti-redis:
     image: redis:7-alpine
     container_name: opencti-redis
     restart: always
-    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
-    networks:
-      - opencti-net
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - opencti_redis_data:/data
 
-  opensearch:
+  # -----------------------------
+  # RabbitMQ (mensajería)
+  # -----------------------------
+  opencti-rabbitmq:
+    image: rabbitmq:3-management
+    container_name: opencti-rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: opencti
+      RABBITMQ_DEFAULT_PASS: opencti
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # consola web RabbitMQ
+    volumes:
+      - opencti_rabbitmq_data:/var/lib/rabbitmq
+
+  # -----------------------------
+  # MinIO (file storage S3-like)
+  # -----------------------------
+  opencti-minio:
+    image: minio/minio:latest
+    container_name: opencti-minio
+    restart: always
+    command: server --console-address ":9001" /data
+    environment:
+      MINIO_ROOT_USER: opencti
+      MINIO_ROOT_PASSWORD: opencti_minio_password
+    ports:
+      - "9000:9000"   # API S3
+      - "9002:9001"   # Consola web MinIO (host 9002 para no chocar con el agente de Portainer)
+    volumes:
+      - opencti_minio_data:/data
+
+  # -----------------------------
+  # OpenSearch (search engine)
+  # -----------------------------
+  opencti-opensearch:
     image: opensearchproject/opensearch:2.17.0
     container_name: opencti-opensearch
     restart: always
     environment:
-      - discovery.type=single-node
-      - bootstrap.memory_lock=true
-      - "OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g"
-      - plugins.security.disabled=true
+      discovery.type: single-node
+      bootstrap.memory_lock: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+      plugins.security.disabled: "true"
     ulimits:
       memlock:
         soft: -1
@@ -75,46 +64,67 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+    ports:
+      - "9200:9200"   # API OpenSearch
+      - "9600:9600"   # API monitorización
     volumes:
-      - opensearch-data:/usr/share/opensearch/data
-    ports:
-      - "9200:9200"
-    networks:
-      - opencti-net
+      - opencti_opensearch_data:/usr/share/opensearch/data
 
-  minio:
-    image: minio/minio:latest
-    container_name: opencti-minio
+  # -----------------------------
+  # OpenCTI (plataforma)
+  # -----------------------------
+  opencti:
+    image: opencti/platform:latest
+    container_name: opencti
     restart: always
-    command: server /data --console-address ":9001"
+    depends_on:
+      - opencti-redis
+      - opencti-rabbitmq
+      - opencti-minio
+      - opencti-opensearch
     environment:
-      - MINIO_ROOT_USER=opencti
-      - MINIO_ROOT_PASSWORD=S0p0rt3..
-    volumes:
-      - minio-data:/data
-    ports:
-      - "9000:9000"
-      - "9002:9001"   # <-- host 9002, dentro del contenedor 9001 (antes 9001:9001)
-    networks:
-      - opencti-net
+      # URL pública de la plataforma (IP del SOC y puerto 8585 en el host)
+      APP__PORT: 8080
+      APP__URL: "http://192.168.5.87:8585"
+      APP__ADMIN_EMAIL: "admin@opencti.local"
+      APP__ADMIN_PASSWORD: "S0p0rt3.."
+      APP__ADMIN_REQUIRED: "true"
 
-  rabbitmq:
-    image: rabbitmq:3-management
-    container_name: opencti-rabbitmq
-    restart: always
-    environment:
-      - RABBITMQ_DEFAULT_USER=opencti
-      - RABBITMQ_DEFAULT_PASS=S0p0rt3..
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    networks:
-      - opencti-net
+      # Redis
+      REDIS__HOSTNAME: opencti-redis
+      REDIS__PORT: 6379
 
-networks:
-  opencti-net:
-    driver: bridge
+      # RabbitMQ
+      RABBITMQ__HOSTNAME: opencti-rabbitmq
+      RABBITMQ__PORT: 5672
+      RABBITMQ__USERNAME: opencti
+      RABBITMQ__PASSWORD: opencti
+
+      # MinIO
+      MINIO__ENDPOINT: opencti-minio
+      MINIO__PORT: 9000
+      MINIO__USE_SSL: "false"
+      MINIO__ACCESS_KEY: opencti
+      MINIO__SECRET_KEY: opencti_minio_password
+      MINIO__BUCKET_NAME: opencti-bucket
+
+      # OpenSearch
+      ELASTICSEARCH__URL: "http://opencti-opensearch:9200"
+      ELASTICSEARCH__USERNAME: ""
+      ELASTICSEARCH__PASSWORD: ""
+
+      # Timezone
+      APP__TIMEZONE: "America/Costa_Rica"
+
+    ports:
+      - "8585:8080"   # <-- OpenCTI accesible desde tu PC en http://192.168.5.87:8585
+
+    # Si quieres etiquetar el stack para Portainer (opcional)
+    labels:
+      - "com.docker.compose.project=opencti-soc"
 
 volumes:
-  opensearch-data:
-  minio-data:
+  opencti_redis_data:
+  opencti_rabbitmq_data:
+  opencti_minio_data:
+  opencti_opensearch_data:
