@@ -33,9 +33,9 @@ services:
       ITOP_LANGUAGE: EN US
       ITOP_ADMIN_USER: admin
       ITOP_ADMIN_PWD: S0p0rt3..
-      ITOP_ADMIN_EMAIL: admin@example.com
+      ITOP_ADMIN_EMAIL: raraya@popularvalroes.com
     ports:
-      - "8000:80"   # Acceso a iTop vía http://IP_DEL_MASTER:8000
+      - "8000:80"   
     networks:
       - itop-net
 
