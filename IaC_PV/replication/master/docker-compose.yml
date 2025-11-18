@@ -1,9 +1,47 @@
-version: "3.8"
+version: "3.9"
 
 services:
-  noc-hello:
-    image: nginx:alpine
-    container_name: noc-hello
+  db:
+    image: mysql:8.0
+    container_name: itop-mysql
     restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password_cambia_esto
+      MYSQL_DATABASE: itop
+      MYSQL_USER: itop
+      MYSQL_PASSWORD: itop_password_cambia_esto
+    volumes:
+      - itop_db_data:/var/lib/mysql
+    networks:
+      - itop-net
+
+  itop:
+    image: combodo/itop:latest
+    container_name: itop-app
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      # Parámetros de conexión a MySQL
+      ITOP_DB_HOST: db
+      ITOP_DB_NAME: itop
+      ITOP_DB_USER: itop
+      ITOP_DB_PWD: S0p0rt3..
+
+      # Opcionales: ajusta según tus necesidades
+      ITOP_ENV: production
+      ITOP_LANGUAGE: EN US
+      ITOP_ADMIN_USER: admin
+      ITOP_ADMIN_PWD: S0p0rt3..
+      ITOP_ADMIN_EMAIL: admin@example.com
     ports:
-      - "8081:80"
+      - "8000:80"   # Acceso a iTop vía http://IP_DEL_MASTER:8000
+    networks:
+      - itop-net
+
+volumes:
+  itop_db_data:
+
+networks:
+  itop-net:
+    driver: bridge
