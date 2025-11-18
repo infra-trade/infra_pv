@@ -2,32 +2,37 @@ version: "3.8"
 
 services:
   db:
-    image: mariadb:10.11
+    image: mysql:8.0
     container_name: itop-db
-    restart: always
+    restart: unless-stopped
     environment:
+      MYSQL_ROOT_PASSWORD: itop_root_password
       MYSQL_DATABASE: itop
       MYSQL_USER: itop
       MYSQL_PASSWORD: S0p0rt3..
-      MYSQL_RANDOM_ROOT_PASSWORD: "no"
     volumes:
       - itop_db_data:/var/lib/mysql
     networks:
       - itop_net
 
   itop:
-    image: supervisions/itop:3.2.2
+    image: vbkunin/itop:3.2.2   # iTop > 3.11
     container_name: itop-app
-    restart: always
+    restart: unless-stopped
     depends_on:
       - db
     ports:
-      - "8080:80"   # iTop accesible en http://IP_DEL_MASTER:8080
+      - "8080:80"               # Acceso desde tu PC: http://192.168.5.85:8080
+    environment:
+      # Variables que espera el config-itop.php de esta imagen
+      DB_HOSTNAME: db
+      DB_ENV_MYSQL_DATABASE: itop
+      DB_ENV_MYSQL_USER: itop
+      DB_ENV_MYSQL_PASSWORD: S0p0rt3..
+      DB_PREFIX: itop_
+      PHP_TIMEZONE: America/Costa_Rica
     networks:
       - itop_net
-    # Opcionalmente puedes montar un volumen para customizaciones:
-    # volumes:
-    #   - itop_app_data:/var/www/html
 
 networks:
   itop_net:
@@ -35,6 +40,3 @@ networks:
 
 volumes:
   itop_db_data:
-    driver: local
-  # itop_app_data:
-  #   driver: local
