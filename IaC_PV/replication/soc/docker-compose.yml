@@ -16,9 +16,9 @@ services:
       - APP__BASE_URL=http://192.168.5.87:8080
 
       # Usuario admin inicial
-      - APP__ADMIN__EMAIL=admin@local
+      - APP__ADMIN__EMAIL=admin@local.com
       - APP__ADMIN__PASSWORD=S0p0rt3..
-      - APP__ADMIN__TOKEN=B6nmuOtlLlwFIKQrlg4TxtmwUdBCZAIq
+      - APP__ADMIN__TOKEN=qXvhxP0cnlWN5sn3sMUt8wmfbaaWX6Uw
 
       # Conexión a Redis
       - REDIS__HOST=redis
@@ -43,7 +43,7 @@ services:
       - RABBITMQ__USERNAME=opencti
       - RABBITMQ__PASSWORD=S0p0rt3..
 
-      # Varios
+      # Memoria Node
       - NODE_OPTIONS=--max-old-space-size=4096
 
     ports:
@@ -94,7 +94,7 @@ services:
       - minio-data:/data
     ports:
       - "9000:9000"
-      - "9002:9002"
+      - "9002:9001"   # <-- host 9002, dentro del contenedor 9001 (antes 9001:9001)
     networks:
       - opencti-net
 
