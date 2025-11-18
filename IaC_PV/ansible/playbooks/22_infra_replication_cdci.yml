@@ -1,86 +1,87 @@
 ---
-- name: 22 - Sincronizar carpeta de replicación (CD/CI simple) y recargar stacks Docker
+- name: 22 - Replicar docker-compose desde IaC_PV hacia nodos infra (CD/CI simple)
   hosts: docker_hosts
   become: true
-  gather_facts: false
 
   vars:
-    # Carpeta base en el nodo Ansible donde editas con VSCode
-    replication_src_base: "/home/pvinfra/infra_pv/IaC_PV/replication"
+    # Mapear rol por IP (NO por nombre)
+    infra_role_by_ip:
+      "192.168.5.85": "master"
+      "192.168.5.86": "noc"
+      "192.168.5.87": "soc"
+
+    # Carpeta base en cada VM donde montaremos los stacks
+    base_remote_dir: "/opt/stacks"
 
   tasks:
-    - name: Verificar que la subcarpeta de replicación está definida para el host
-      ansible.builtin.assert:
-        that:
-          - replication_subdir is defined
-          - replication_dest is defined
-        fail_msg: >-
-          Falta definir replication_subdir o replication_dest para {{ inventory_hostname }}
-          en ansible/inventories/infra/hosts.yml
+    - name: Determinar rol de este host según su IP
+      ansible.builtin.set_fact:
+        infra_role: "{{ infra_role_by_ip[ansible_host] | default('master') }}"
 
-    - name: Crear carpeta destino en el host (si no existe)
+    - name: Mostrar rol detectado para este host
+      ansible.builtin.debug:
+        msg: "Host {{ inventory_hostname }} ({{ ansible_host }}) => rol {{ infra_role }}"
+
+    # ------------------------------------------------------------------
+    # Crear estructura de carpetas en cada VM
+    # ------------------------------------------------------------------
+    - name: Crear directorio base para stacks
       ansible.builtin.file:
-        path: "{{ replication_dest }}"
+        path: "{{ base_remote_dir }}"
         state: directory
-        owner: "{{ ansible_user | default('pvinfra') }}"
-        group: "{{ ansible_user | default('pvinfra') }}"
+        owner: root
+        group: root
         mode: "0755"
 
-    - name: Sincronizar contenidos desde el repo al host (rsync)
-      ansible.builtin.synchronize:
-        src: "{{ replication_src_base }}/{{ replication_subdir }}/"
-        dest: "{{ replication_dest }}/"
-        delete: true          # borra archivos que ya no existan en el repo
-        recursive: true
-        archive: true
-      delegate_to: localhost
-
-    - name: Mostrar qué ruta se ha sincronizado en el host
-      ansible.builtin.debug:
-        msg: >-
-          Host {{ inventory_hostname }}:
-          sincronizado {{ replication_src_base }}/{{ replication_subdir }}/
-          -> {{ replication_dest }}/
+    - name: Crear subdirectorios master, noc y soc en cada VM
+      ansible.builtin.file:
+        path: "{{ base_remote_dir }}/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - master
+        - noc
+        - soc
 
     # ------------------------------------------------------------------
-    # Sección "CD/CI": relanzar docker compose después de sincronizar
+    # Replicar docker-compose desde el repo local al host remoto
     # ------------------------------------------------------------------
+    - name: Definir ruta local del docker-compose a replicar para este rol
+      ansible.builtin.set_fact:
+        local_compose_path: "{{ playbook_dir | dirname | dirname }}/replication/{{ infra_role }}/docker-compose.yml"
 
-    - name: Verificar que existe carpeta de docker compose en el host
+    - name: Comprobar que existe el docker-compose local para este rol
       ansible.builtin.stat:
-        path: "{{ replication_compose_dir | default(replication_dest) }}"
-      register: compose_dir_stat
+        path: "{{ local_compose_path }}"
+      register: compose_stat
+      delegate_to: localhost
+      run_once: false
 
-    - name: Avisar si la carpeta de docker compose no existe
-      ansible.builtin.debug:
-        msg: >-
-          ATENCIÓN: no existe la carpeta {{ replication_compose_dir | default(replication_dest) }}
-          en {{ inventory_hostname }}. No se ejecutará docker compose.
-      when: not compose_dir_stat.stat.exists
+    - name: Fallar si no existe el docker-compose local para este rol
+      ansible.builtin.fail:
+        msg: "No existe {{ local_compose_path }} en el nodo de Ansible para rol {{ infra_role }}."
+      when: not compose_stat.stat.exists
+      delegate_to: localhost
+      run_once: false
 
-    - name: Ejecutar "docker compose pull" en la carpeta del stack
-      ansible.builtin.command: docker compose pull
+    - name: Copiar docker-compose.yml correspondiente al rol
+      ansible.builtin.copy:
+        src: "{{ local_compose_path }}"
+        dest: "{{ base_remote_dir }}/{{ infra_role }}/docker-compose.yml"
+        owner: root
+        group: root
+        mode: "0644"
+
+    # ------------------------------------------------------------------
+    # Desplegar / actualizar stack con docker compose
+    # ------------------------------------------------------------------
+    - name: Levantar stack con docker compose (pull + up -d)
+      ansible.builtin.shell: |
+        set -e
+        cd "{{ base_remote_dir }}/{{ infra_role }}"
+        docker compose pull
+        docker compose up -d
       args:
-        chdir: "{{ replication_compose_dir | default(replication_dest) }}"
-      when: compose_dir_stat.stat.exists
-      register: compose_pull_result
-      changed_when: "'Downloaded' in compose_pull_result.stdout
-                     or 'Pulling' in compose_pull_result.stdout
-                     or compose_pull_result.rc == 0"
-
-    - name: Ejecutar "docker compose up -d" en la carpeta del stack
-      ansible.builtin.command: docker compose up -d
-      args:
-        chdir: "{{ replication_compose_dir | default(replication_dest) }}"
-      when: compose_dir_stat.stat.exists
-      register: compose_up_result
-      changed_when: compose_up_result.rc == 0
-
-    - name: Mostrar resumen de actualización del stack Docker
-      ansible.builtin.debug:
-        msg: >-
-          Host {{ inventory_hostname }}:
-          docker compose ejecutado en {{ replication_compose_dir | default(replication_dest) }}.
-          Resultado pull: rc={{ compose_pull_result.rc | default('n/a') }},
-          resultado up: rc={{ compose_up_result.rc | default('n/a') }}.
-      when: compose_dir_stat.stat.exists
+        executable: /bin/bash
