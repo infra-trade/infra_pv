@@ -6,7 +6,7 @@ services:
     container_name: itop-db
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: itop_root_password
+      MYSQL_ROOT_PASSWORD: S0p0rt3..
       MYSQL_DATABASE: itop
       MYSQL_USER: itop
       MYSQL_PASSWORD: S0p0rt3..
