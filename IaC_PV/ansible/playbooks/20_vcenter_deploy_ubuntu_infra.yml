@@ -97,7 +97,7 @@
 - name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas
   hosts: pv_infra_temp
   gather_facts: false
-  remote_user: "{{ infra_ssh_user }}"
+  # remote_user: "{{ infra_ssh_user }}"   # <- QUITADO, usamos ansible_user
   become: true
   serial: 1
 
@@ -120,28 +120,28 @@
 
     - name: Crear carpeta .ssh si no existe
       ansible.builtin.file:
-        path: "/home/{{ infra_ssh_user }}/.ssh"
+        path: "/home/{{ ansible_user }}/.ssh"
         state: directory
-        owner: "{{ infra_ssh_user }}"
-        group: "{{ infra_ssh_user }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
         mode: "0700"
 
     - name: Autorizar llave pública del nodo Ansible
       ansible.posix.authorized_key:
-        user: "{{ infra_ssh_user }}"
+        user: "{{ ansible_user }}"
         state: present
         key: "{{ ssh_public_key }}"
 
     - name: Asegurar que el usuario está en el grupo sudo
       ansible.builtin.user:
-        name: "{{ infra_ssh_user }}"
+        name: "{{ ansible_user }}"
         groups: "sudo"
         append: true
 
     - name: Permitir sudo sin contraseña para el usuario
       ansible.builtin.copy:
-        dest: "/etc/sudoers.d/99-{{ infra_ssh_user }}-nopasswd"
-        content: "{{ infra_ssh_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        dest: "/etc/sudoers.d/99-{{ ansible_user }}-nopasswd"
+        content: "{{ ansible_user }} ALL=(ALL) NOPASSWD:ALL\n"
         owner: root
         group: root
         mode: "0440"
