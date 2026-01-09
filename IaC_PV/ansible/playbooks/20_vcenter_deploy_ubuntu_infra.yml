@@ -1,15 +1,13 @@
 ---
 - name: Crear VMs de infraestructura en vCenter desde PV-INFRA-IaC
-  hosts: localhost        # usamos localhost directo
+  hosts: localhost
   gather_facts: false
-  connection: local       # forzamos conexión local para vCenter
+  connection: local
 
-  # Cargamos credenciales y parámetros de vCenter desde el inventario de vcenter
   vars_files:
     - "../inventories/vcenter/group_vars/all/vcenter.yml"
 
   vars:
-    # Usuario SSH con el que nos vamos a conectar a las VMs recién clonadas
     infra_ssh_user: "pvinfra"
 
     infra_vms:
@@ -31,8 +29,7 @@
         memory_mb: 16384
         disk_gb: 140
 
-    # Datos del template y entorno vSphere
-    vm_source_name: "PV-INFRA-IaC"            # Nombre del TEMPLATE en vCenter
+    vm_source_name: "PV-INFRA-IaC"
     vm_folder: "PV_IaC"
     vm_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
     vm_network: "VLAN-5"
@@ -59,7 +56,6 @@
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
 
-        # IMPORTANTE: No tocar hardware para evitar cpuHotAdd/memoryHotAdd
         networks:
           - name: "{{ vm_network }}"
             type: static
@@ -79,7 +75,6 @@
           - pv_infra_temp
         ansible_host: "{{ item.ip }}"
         ansible_user: "{{ infra_ssh_user }}"
-        # Desactiva comprobación estricta de host key para evitar problemas
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
       loop: "{{ infra_vms }}"
 
