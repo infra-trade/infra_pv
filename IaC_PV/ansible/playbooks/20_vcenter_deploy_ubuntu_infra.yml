@@ -1,8 +1,7 @@
 ---
 - name: Crear VMs de infraestructura en vCenter desde PV-INFRA-IaC
-  hosts: localhost
+  hosts: vcenter         # usa el grupo definido en el inventario (localhost)
   gather_facts: false
-  connection: local
 
   # Cargamos credenciales y parámetros de vCenter desde el inventario de vcenter
   vars_files:
@@ -97,7 +96,6 @@
 - name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas
   hosts: pv_infra_temp
   gather_facts: false
-  # remote_user: "{{ infra_ssh_user }}"   # <- QUITADO, usamos ansible_user
   become: true
   serial: 1
 
