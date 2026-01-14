@@ -69,6 +69,14 @@
                 - ./config:/config
                 - ./logs:/logs
 
+    - name: Detener stack IBKR previo (si existe)
+      ansible.builtin.command:
+        cmd: "{{ docker_compose_cmd }} down"
+        chdir: "{{ ibkr_stack_dir }}"
+      register: ibkr_down_result
+      failed_when: false
+      changed_when: ibkr_down_result.rc == 0
+
     - name: Desplegar stack IBKR con docker-compose
       ansible.builtin.command:
         cmd: "{{ docker_compose_cmd }} up -d"
@@ -132,6 +140,14 @@
                 - ./dags:/opt/airflow/dags
                 - ./logs:/opt/airflow/logs
                 - ./plugins:/opt/airflow/plugins"
+
+    - name: Detener stack Airflow previo (si existe)
+      ansible.builtin.command:
+        cmd: "{{ docker_compose_cmd }} down"
+        chdir: "{{ airflow_stack_dir }}"
+      register: airflow_down_result
+      failed_when: false
+      changed_when: airflow_down_result.rc == 0
 
     - name: Desplegar stack Airflow con docker-compose
       ansible.builtin.command:
@@ -246,6 +262,14 @@
               volumes:
                 - ./spark/jobs:/opt/bitnami/spark/jobs
                 - ./spark/config:/opt/bitnami/spark/conf
+
+    - name: Detener stack Kafka + Spark previo (si existe)
+      ansible.builtin.command:
+        cmd: "{{ docker_compose_cmd }} down"
+        chdir: "{{ trading_stack_dir }}"
+      register: streaming_down_result
+      failed_when: false
+      changed_when: streaming_down_result.rc == 0
 
     - name: Desplegar stack Kafka + Spark con docker-compose
       ansible.builtin.command:
