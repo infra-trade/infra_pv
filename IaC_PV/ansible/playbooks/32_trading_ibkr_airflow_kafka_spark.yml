@@ -1,0 +1,229 @@
+---
+###############################################################################
+# 32 - Infra de trading algorítmico:
+#   - pv-infra-master: contenedor IBKR
+#   - pv-infra-noc   : Airflow (orquestación de estrategias)
+#   - pv-infra-soc   : Kafka + Zookeeper + Spark (streaming + backtesting)
+###############################################################################
+
+- name: 32 - Desplegar contenedor IBKR en nodo master
+  hosts: pv-infra-master
+  become: true
+
+  vars:
+    ibkr_stack_dir: "{{ replication_dest }}/ibkr"
+    ibkr_image: "your-ibkr-gateway-image:latest"       # AJUSTA ESTA IMAGEN
+    ibkr_container_name: "ibkr-gateway"
+    ibkr_api_port: 4001                                 # puerto API expuesto
+
+  tasks:
+    - name: Crear carpeta base para stack IBKR
+      ansible.builtin.file:
+        path: "{{ ibkr_stack_dir }}"
+        state: directory
+        owner: "{{ ansible_user | default('pvinfra') }}"
+        group: "{{ ansible_user | default('pvinfra') }}"
+        mode: "0755"
+
+    - name: Crear subcarpetas de configuración y logs de IBKR
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ansible_user | default('pvinfra') }}"
+        group: "{{ ansible_user | default('pvinfra') }}"
+        mode: "0755"
+      loop:
+        - "{{ ibkr_stack_dir }}/config"
+        - "{{ ibkr_stack_dir }}/logs"
+        - "{{ ibkr_stack_dir }}/env"
+
+    - name: Crear archivo .env de ejemplo para IBKR (si no existe)
+      ansible.builtin.copy:
+        dest: "{{ ibkr_stack_dir }}/env/ibkr.env"
+        content: |
+          # Rellena con tus credenciales y config de IBKR
+          # IBKR_USERNAME=tu_usuario
+          # IBKR_PASSWORD=tu_password
+          # IBKR_IACCOUNT=tu_cuenta
+          # IBKR_TRADING_MODE=paper   # o live
+        force: no
+        mode: "0600"
+
+    - name: Crear docker-compose para IBKR
+      ansible.builtin.copy:
+        dest: "{{ ibkr_stack_dir }}/docker-compose.yml"
+        mode: "0644"
+        content: |
+          version: "3.8"
+          services:
+            ibkr-gateway:
+              image: {{ ibkr_image }}
+              container_name: {{ ibkr_container_name }}
+              restart: always
+              env_file:
+                - ./env/ibkr.env
+              ports:
+                - "{{ ibkr_api_port }}:4001"
+              volumes:
+                - ./config:/config
+                - ./logs:/logs
+
+    - name: Desplegar stack IBKR con docker compose
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ ibkr_stack_dir }}"
+      register: ibkr_compose_result
+      changed_when: ibkr_compose_result.rc == 0
+
+# ---------------------------------------------------------------------------
+
+- name: 32 - Desplegar Airflow para orquestación de estrategias (NOC)
+  hosts: pv-infra-noc
+  become: true
+
+  vars:
+    airflow_stack_dir: "{{ replication_dest }}/airflow"
+    airflow_image: "apache/airflow:latest"      # AJUSTA SI USAS OTRA IMAGEN
+    airflow_container_name: "airflow"
+
+  tasks:
+    - name: Crear carpeta base para stack Airflow
+      ansible.builtin.file:
+        path: "{{ airflow_stack_dir }}"
+        state: directory
+        owner: "{{ ansible_user | default('pvinfra') }}"
+        group: "{{ ansible_user | default('pvinfra') }}"
+        mode: "0755"
+
+    - name: Crear carpetas de DAGs, logs y plugins (prod y backtest)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ansible_user | default('pvinfra') }}"
+        group: "{{ ansible_user | default('pvinfra') }}"
+        mode: "0755"
+      loop:
+        - "{{ airflow_stack_dir }}/dags/prod"
+        - "{{ airflow_stack_dir }}/dags/backtest"
+        - "{{ airflow_stack_dir }}/logs"
+        - "{{ airflow_stack_dir }}/plugins"
+
+    - name: Crear docker-compose de Airflow (modo simple / SequentialExecutor)
+      ansible.builtin.copy:
+        dest: "{{ airflow_stack_dir }}/docker-compose.yml"
+        mode: "0644"
+        content: |
+          version: "3.8"
+          services:
+            airflow:
+              image: {{ airflow_image }}
+              container_name: {{ airflow_container_name }}
+              restart: always
+              environment:
+                - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
+                - AIRFLOW__CORE__LOAD_EXAMPLES=False
+                - AIRFLOW__WEBSERVER__RBAC=True
+                - AIRFLOW__CORE__FERNET_KEY=CHANGE_ME_FERNET_KEY
+              ports:
+                - "8080:8080"
+              volumes:
+                - ./dags:/opt/airflow/dags
+                - ./logs:/opt/airflow/logs
+                - ./plugins:/opt/airflow/plugins
+
+    - name: Desplegar stack Airflow con docker compose
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ airflow_stack_dir }}"
+      register: airflow_compose_result
+      changed_when: airflow_compose_result.rc == 0
+
+# ---------------------------------------------------------------------------
+
+- name: 32 - Desplegar Kafka + Zookeeper + Spark (SOC)
+  hosts: pv-infra-soc
+  become: true
+
+  vars:
+    trading_stack_dir: "{{ replication_dest }}/streaming"
+    zookeeper_image: "confluentinc/cp-zookeeper:latest"  # AJUSTA IMÁGENES
+    kafka_image: "confluentinc/cp-kafka:latest"
+    spark_image: "bitnami/spark:latest"
+
+  tasks:
+    - name: Crear carpeta base para stack de streaming / cómputo
+      ansible.builtin.file:
+        path: "{{ trading_stack_dir }}"
+        state: directory
+        owner: "{{ ansible_user | default('pvinfra') }}"
+        group: "{{ ansible_user | default('pvinfra') }}"
+        mode: "0755"
+
+    - name: Crear carpetas para Kafka y Spark (incluye prod/backtest)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ansible_user | default('pvinfra') }}"
+        group: "{{ ansible_user | default('pvinfra') }}"
+        mode: "0755"
+      loop:
+        - "{{ trading_stack_dir }}/kafka/data"
+        - "{{ trading_stack_dir }}/kafka/config"
+        - "{{ trading_stack_dir }}/spark/jobs/prod"
+        - "{{ trading_stack_dir }}/spark/jobs/backtest"
+        - "{{ trading_stack_dir }}/spark/config"
+
+    - name: Crear docker-compose para Kafka + Zookeeper + Spark
+      ansible.builtin.copy:
+        dest: "{{ trading_stack_dir }}/docker-compose.yml"
+        mode: "0644"
+        content: |
+          version: "3.8"
+          services:
+            zookeeper:
+              image: {{ zookeeper_image }}
+              container_name: zookeeper
+              restart: always
+              environment:
+                ZOOKEEPER_CLIENT_PORT: 2181
+                ZOOKEEPER_TICK_TIME: 2000
+              ports:
+                - "2181:2181"
+
+            kafka:
+              image: {{ kafka_image }}
+              container_name: kafka
+              restart: always
+              depends_on:
+                - zookeeper
+              ports:
+                - "9092:9092"
+              environment:
+                KAFKA_BROKER_ID: 1
+                KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+                KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+                KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+                KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+              volumes:
+                - ./kafka/data:/var/lib/kafka/data
+                - ./kafka/config:/etc/kafka
+
+            spark:
+              image: {{ spark_image }}
+              container_name: spark
+              restart: always
+              environment:
+                - SPARK_MODE=master
+              ports:
+                - "7077:7077"
+                - "8081:8080"
+              volumes:
+                - ./spark/jobs:/opt/spark/jobs
+                - ./spark/config:/opt/spark/conf
+
+    - name: Desplegar stack Kafka + Spark con docker compose
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ trading_stack_dir }}"
+      register: streaming_compose_result
+      changed_when: streaming_compose_result.rc == 0
