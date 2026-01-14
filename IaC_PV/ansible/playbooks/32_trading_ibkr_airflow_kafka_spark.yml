@@ -12,10 +12,10 @@
 
   vars:
     ibkr_stack_dir: "{{ replication_dest }}/ibkr"
-    ibkr_image: "ghcr.io/gnzsnz/ib-gateway:latest"       # AJUSTA ESTA IMAGEN
+    ibkr_image: "ghcr.io/gnzsnz/ib-gateway:latest"
     ibkr_container_name: "ibkr-gateway"
-    ibkr_api_port: 4001                                 # puerto API expuesto
-    docker_compose_cmd: "docker-compose"                # usamos v1
+    ibkr_api_port: 4001
+    docker_compose_cmd: "docker-compose"
 
   tasks:
     - name: Crear carpeta base para stack IBKR
@@ -84,7 +84,7 @@
 
   vars:
     airflow_stack_dir: "{{ replication_dest }}/airflow"
-    airflow_image: "apache/airflow:latest"      # AJUSTA SI USAS OTRA IMAGEN
+    airflow_image: "apache/airflow:latest"
     airflow_container_name: "airflow"
     docker_compose_cmd: "docker-compose"
 
@@ -131,7 +131,7 @@
               volumes:
                 - ./dags:/opt/airflow/dags
                 - ./logs:/opt/airflow/logs
-                - ./plugins:/opt/airflow/plugins
+                - ./plugins:/opt/airflow/plugins"
 
     - name: Desplegar stack Airflow con docker-compose
       ansible.builtin.command:
@@ -148,9 +148,9 @@
 
   vars:
     trading_stack_dir: "{{ replication_dest }}/streaming"
-    zookeeper_image: "confluentinc/cp-zookeeper:latest"  # AJUSTA IMÁGENES
+    zookeeper_image: "confluentinc/cp-zookeeper:latest"
     kafka_image: "confluentinc/cp-kafka:latest"
-    spark_image: "bitnami/spark:latest"
+    spark_image: "bitnami/spark:3.5.1"
     docker_compose_cmd: "docker-compose"
 
   tasks:
@@ -211,18 +211,41 @@
                 - ./kafka/data:/var/lib/kafka/data
                 - ./kafka/config:/etc/kafka
 
-            spark:
+            spark-master:
               image: {{ spark_image }}
-              container_name: spark
+              container_name: spark-master
               restart: always
               environment:
                 - SPARK_MODE=master
+                - SPARK_RPC_AUTHENTICATION_ENABLED=no
+                - SPARK_RPC_ENCRYPTION_ENABLED=no
+                - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+                - SPARK_SSL_ENABLED=no
               ports:
                 - "7077:7077"
                 - "8081:8080"
               volumes:
-                - ./spark/jobs:/opt/spark/jobs
-                - ./spark/config:/opt/spark/conf
+                - ./spark/jobs:/opt/bitnami/spark/jobs
+                - ./spark/config:/opt/bitnami/spark/conf
+
+            spark-worker:
+              image: {{ spark_image }}
+              container_name: spark-worker
+              restart: always
+              depends_on:
+                - spark-master
+              environment:
+                - SPARK_MODE=worker
+                - SPARK_MASTER_URL=spark://spark-master:7077
+                - SPARK_WORKER_MEMORY=2G
+                - SPARK_WORKER_CORES=2
+                - SPARK_RPC_AUTHENTICATION_ENABLED=no
+                - SPARK_RPC_ENCRYPTION_ENABLED=no
+                - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+                - SPARK_SSL_ENABLED=no
+              volumes:
+                - ./spark/jobs:/opt/bitnami/spark/jobs
+                - ./spark/config:/opt/bitnami/spark/conf
 
     - name: Desplegar stack Kafka + Spark con docker-compose
       ansible.builtin.command:
