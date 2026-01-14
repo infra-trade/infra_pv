@@ -75,27 +75,39 @@
 
 # ----------------------------------------------------------------------
 
-- name: 21 - Desplegar Portainer Server en pv-infra-master
+- name: 21 - Desplegar Portainer Server en pv-infra-master (reset completo)
   hosts: portainer_server
   become: true
 
-  tasks:
-    - name: Crear volumen de datos para Portainer (Server)
-      ansible.builtin.command:
-        cmd: docker volume create portainer_data
-      register: portainer_volume
-      changed_when: "'portainer_data' in portainer_volume.stdout"
+  vars:
+    portainer_image: "portainer/portainer-ce:latest"
+    portainer_container_name: "portainer"
+    portainer_volume_name: "portainer_data"
 
+  tasks:
     - name: Eliminar contenedor Portainer existente (si lo hay)
       ansible.builtin.command:
-        cmd: docker rm -f portainer
+        cmd: docker rm -f {{ portainer_container_name }}
       register: remove_portainer_result
       failed_when: false
       changed_when: remove_portainer_result.rc == 0
 
-    - name: Descargar imagen portainer/portainer-ce:latest con reintentos
+    - name: Eliminar volumen de datos Portainer (RESET de la base de datos)
       ansible.builtin.command:
-        cmd: docker pull portainer/portainer-ce:latest
+        cmd: docker volume rm {{ portainer_volume_name }}
+      register: remove_portainer_volume_result
+      failed_when: false
+      changed_when: remove_portainer_volume_result.rc == 0
+
+    - name: Crear volumen de datos para Portainer (Server)
+      ansible.builtin.command:
+        cmd: docker volume create {{ portainer_volume_name }}
+      register: portainer_volume
+      changed_when: "'{{ portainer_volume_name }}' in portainer_volume.stdout"
+
+    - name: Descargar imagen {{ portainer_image }} con reintentos
+      ansible.builtin.command:
+        cmd: docker pull {{ portainer_image }}
       register: pull_portainer_result
       retries: 3
       delay: 10
@@ -106,37 +118,49 @@
       ansible.builtin.command: >
         docker run -d
         -p 9443:9443
-        --name portainer
+        --name {{ portainer_container_name }}
         --restart=always
         -v /var/run/docker.sock:/var/run/docker.sock
-        -v portainer_data:/data
-        portainer/portainer-ce:latest
+        -v {{ portainer_volume_name }}:/data
+        {{ portainer_image }}
       register: run_portainer_result
       changed_when: run_portainer_result.rc == 0
 
 # ----------------------------------------------------------------------
 
-- name: 21 - Desplegar Portainer Agent en nodos
+- name: 21 - Desplegar Portainer Agent en nodos (reset completo)
   hosts: portainer_agents
   become: true
 
-  tasks:
-    - name: Crear volumen de datos para Portainer Agent
-      ansible.builtin.command:
-        cmd: docker volume create portainer_agent_data
-      register: portainer_agent_volume
-      changed_when: "'portainer_agent_data' in portainer_agent_volume.stdout"
+  vars:
+    portainer_agent_image: "portainer/agent:latest"
+    portainer_agent_container_name: "portainer_agent"
+    portainer_agent_volume_name: "portainer_agent_data"
 
+  tasks:
     - name: Eliminar contenedor Portainer Agent existente (si lo hay)
       ansible.builtin.command:
-        cmd: docker rm -f portainer_agent
+        cmd: docker rm -f {{ portainer_agent_container_name }}
       register: remove_agent_result
       failed_when: false
       changed_when: remove_agent_result.rc == 0
 
-    - name: Descargar imagen portainer/agent:latest con reintentos
+    - name: Eliminar volumen de datos Portainer Agent (para un reset completo)
       ansible.builtin.command:
-        cmd: docker pull portainer/agent:latest
+        cmd: docker volume rm {{ portainer_agent_volume_name }}
+      register: remove_agent_volume_result
+      failed_when: false
+      changed_when: remove_agent_volume_result.rc == 0
+
+    - name: Crear volumen de datos para Portainer Agent
+      ansible.builtin.command:
+        cmd: docker volume create {{ portainer_agent_volume_name }}
+      register: portainer_agent_volume
+      changed_when: "'{{ portainer_agent_volume_name }}' in portainer_agent_volume.stdout"
+
+    - name: Descargar imagen {{ portainer_agent_image }} con reintentos
+      ansible.builtin.command:
+        cmd: docker pull {{ portainer_agent_image }}
       register: pull_agent_result
       retries: 3
       delay: 10
@@ -146,11 +170,11 @@
     - name: Desplegar contenedor Portainer Agent
       ansible.builtin.command: >
         docker run -d
-        --name portainer_agent
+        --name {{ portainer_agent_container_name }}
         --restart=always
         -p 9001:9001
         -v /var/run/docker.sock:/var/run/docker.sock
         -v /var/lib/docker/volumes:/var/lib/docker/volumes
-        portainer/agent:latest
+        {{ portainer_agent_image }}
       register: run_agent_result
       changed_when: run_agent_result.rc == 0
