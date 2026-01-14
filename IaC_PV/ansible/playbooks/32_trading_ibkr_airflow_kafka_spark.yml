@@ -7,6 +7,10 @@
   hosts: pv-infra-master
   become: true
 
+  # Cargamos secretos cifrados (IBKR, etc.)
+  vars_files:
+    - "../inventories/infra/group_vars/trading_secrets.yml"
+
   vars:
     ibkr_stack_base: /opt/stacks/master/ibkr
     ibkr_compose_file: "{{ ibkr_stack_base }}/docker-compose.yml"
@@ -32,19 +36,13 @@
         - "{{ ibkr_stack_base }}/logs"
         - "{{ ibkr_stack_base }}/env"
 
-    - name: Crear archivo .env de ejemplo para IBKR (si no existe)
-      ansible.builtin.copy:
+    - name: Crear archivo .env real para IBKR desde plantilla
+      ansible.builtin.template:
+        src: "ibkr.env.j2"
         dest: "{{ ibkr_stack_base }}/env/ibkr.env"
-        content: |
-          # Configuración de ejemplo para IBKR Gateway
-          # Reemplaza con tus credenciales reales antes de usar en producción
-          IBKR_USERNAME=tu_usuario
-          IBKR_PASSWORD=tu_password
-          IBKR_TRADING_MODE=paper
         owner: root
         group: root
         mode: "0600"
-        force: false
 
     - name: Crear docker-compose para IBKR
       ansible.builtin.copy:
