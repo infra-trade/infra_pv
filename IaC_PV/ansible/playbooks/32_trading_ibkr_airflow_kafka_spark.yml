@@ -104,17 +104,17 @@
       ansible.builtin.file:
         path: "{{ airflow_base_dir }}"
         state: directory
-        owner: root
-        group: root
-        mode: "0755"
+        owner: "50000"
+        group: "50000"
+        mode: "0775"
 
     - name: Crear carpetas de DAGs, logs y plugins (prod y backtest)
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
-        owner: root
-        group: root
-        mode: "0755"
+        owner: "50000"
+        group: "50000"
+        mode: "0775"
       loop:
         - "{{ airflow_base_dir }}/dags/prod"
         - "{{ airflow_base_dir }}/dags/backtest"
@@ -124,8 +124,8 @@
     - name: Crear docker-compose de Airflow (modo simple / SequentialExecutor)
       ansible.builtin.copy:
         dest: "{{ airflow_compose_file }}"
-        owner: root
-        group: root
+        owner: "50000"
+        group: "50000"
         mode: "0644"
         content: |
           version: "3.8"
