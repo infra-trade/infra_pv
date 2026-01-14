@@ -1,0 +1,171 @@
+==== [Tue Nov 18 01:24:01 UTC 2025] Comprobando cambios en Git ====
+No hay cambios nuevos en origin/main. Nada que desplegar.
+==== [Tue Nov 18 01:25:01 UTC 2025] Comprobando cambios en Git ====
+No hay cambios nuevos en origin/main. Nada que desplegar.
+==== [Tue Nov 18 01:26:01 UTC 2025] Comprobando cambios en Git ====
+No hay cambios nuevos en origin/main. Nada que desplegar.
+==== [Tue Nov 18 01:27:01 UTC 2025] Comprobando cambios en Git ====
+No hay cambios nuevos en origin/main. Nada que desplegar.
+==== [Tue Nov 18 01:28:01 UTC 2025] Comprobando cambios en Git ====
+From github.com:infra-trade/infra_pv
+   e4aee5e..e597162  main       -> origin/main
+Cambios detectados. Haciendo git pull...
+From github.com:infra-trade/infra_pv
+ * branch            main       -> FETCH_HEAD
+Updating e4aee5e..e597162
+Fast-forward
+ IaC_PV/replication/master/docker-compose.yml | 48 +++++++++++++++++++++++++---
+ 1 file changed, 43 insertions(+), 5 deletions(-)
+Ejecutando Ansible playbook 22_infra_replication_cdci.yml...
+/usr/lib/python3.12/getpass.py:91: GetPassWarning: Can not control echo on the terminal.
+  passwd = fallback_getpass(prompt, stream)
+Warning: Password input may be echoed.
+BECOME password: 
+
+PLAY [22 - Replicar docker-compose desde IaC_PV hacia nodos infra (CD/CI simple)] ***
+
+TASK [Gathering Facts] *********************************************************
+ok: [pv-infra-master]
+ok: [pv-infra-soc]
+ok: [pv-infra-noc]
+
+TASK [Determinar rol de este host según su IP] *********************************
+ok: [pv-infra-master]
+ok: [pv-infra-noc]
+ok: [pv-infra-soc]
+
+TASK [Mostrar rol detectado para este host] ************************************
+ok: [pv-infra-master] => {
+    "msg": "Host pv-infra-master (192.168.5.85) => rol master"
+}
+ok: [pv-infra-noc] => {
+    "msg": "Host pv-infra-noc (192.168.5.86) => rol noc"
+}
+ok: [pv-infra-soc] => {
+    "msg": "Host pv-infra-soc (192.168.5.87) => rol soc"
+}
+
+TASK [Crear directorio base para stacks] ***************************************
+ok: [pv-infra-master]
+ok: [pv-infra-noc]
+ok: [pv-infra-soc]
+
+TASK [Crear subdirectorios master, noc y soc en cada VM] ***********************
+ok: [pv-infra-master] => (item=master)
+ok: [pv-infra-noc] => (item=master)
+ok: [pv-infra-soc] => (item=master)
+ok: [pv-infra-master] => (item=noc)
+ok: [pv-infra-noc] => (item=noc)
+ok: [pv-infra-soc] => (item=noc)
+ok: [pv-infra-master] => (item=soc)
+ok: [pv-infra-noc] => (item=soc)
+ok: [pv-infra-soc] => (item=soc)
+
+TASK [Definir ruta local del docker-compose a replicar para este rol] **********
+ok: [pv-infra-master]
+ok: [pv-infra-noc]
+ok: [pv-infra-soc]
+
+TASK [Comprobar que existe el docker-compose local para este rol] **************
+fatal: [pv-infra-soc -> localhost]: FAILED! => {"changed": false, "module_stderr": "sudo: a password is required\n", "module_stdout": "", "msg": "MODULE FAILURE\nSee stdout/stderr for the exact error", "rc": 1}
+fatal: [pv-infra-master -> localhost]: FAILED! => {"changed": false, "module_stderr": "sudo: a password is required\n", "module_stdout": "", "msg": "MODULE FAILURE\nSee stdout/stderr for the exact error", "rc": 1}
+fatal: [pv-infra-noc -> localhost]: FAILED! => {"changed": false, "module_stderr": "sudo: a password is required\n", "module_stdout": "", "msg": "MODULE FAILURE\nSee stdout/stderr for the exact error", "rc": 1}
+
+PLAY RECAP *********************************************************************
+pv-infra-master            : ok=6    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+pv-infra-noc               : ok=6    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+pv-infra-soc               : ok=6    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+
+==== [Tue Nov 18 01:29:01 UTC 2025] Comprobando cambios en Git ====
+No hay cambios nuevos en origin/main. Nada que desplegar.
+==== [Tue Nov 18 01:30:01 UTC 2025] Comprobando cambios en Git ====
+No hay cambios nuevos en origin/main. Nada que desplegar.
+==== [Tue Nov 18 01:31:01 UTC 2025] Comprobando cambios en Git ====
+No hay cambios nuevos en origin/main. Nada que desplegar.
+==== [Tue Nov 18 01:32:02 UTC 2025] Comprobando cambios en Git ====
+From github.com:infra-trade/infra_pv
+   e597162..74babc3  main       -> origin/main
+Cambios detectados. Haciendo git pull...
+From github.com:infra-trade/infra_pv
+ * branch            main       -> FETCH_HEAD
+Updating e597162..74babc3
+Fast-forward
+ .../playbooks/22_infra_replication_cdci.yml        | 144 +++++++++------------
+ 1 file changed, 58 insertions(+), 86 deletions(-)
+Ejecutando Ansible playbook 22_infra_replication_cdci.yml...
+/usr/lib/python3.12/getpass.py:91: GetPassWarning: Can not control echo on the terminal.
+  passwd = fallback_getpass(prompt, stream)
+Warning: Password input may be echoed.
+BECOME password: 
+
+PLAY [22 - Replicar docker-compose desde IaC_PV hacia nodos infra (CD/CI simple)] ***
+
+TASK [Gathering Facts] *********************************************************
+ok: [pv-infra-master]
+ok: [pv-infra-noc]
+ok: [pv-infra-soc]
+
+TASK [Determinar rol de este host según su IP] *********************************
+ok: [pv-infra-master]
+ok: [pv-infra-noc]
+ok: [pv-infra-soc]
+
+TASK [Mostrar rol detectado para este host] ************************************
+ok: [pv-infra-master] => {
+    "msg": "Host pv-infra-master (192.168.5.85) => rol master"
+}
+ok: [pv-infra-noc] => {
+    "msg": "Host pv-infra-noc (192.168.5.86) => rol noc"
+}
+ok: [pv-infra-soc] => {
+    "msg": "Host pv-infra-soc (192.168.5.87) => rol soc"
+}
+
+TASK [Crear directorio base para stacks] ***************************************
+ok: [pv-infra-master]
+ok: [pv-infra-noc]
+ok: [pv-infra-soc]
+
+TASK [Crear subdirectorios master, noc y soc en cada VM] ***********************
+ok: [pv-infra-master] => (item=master)
+ok: [pv-infra-soc] => (item=master)
+ok: [pv-infra-noc] => (item=master)
+ok: [pv-infra-master] => (item=noc)
+ok: [pv-infra-soc] => (item=noc)
+ok: [pv-infra-noc] => (item=noc)
+ok: [pv-infra-master] => (item=soc)
+ok: [pv-infra-soc] => (item=soc)
+ok: [pv-infra-noc] => (item=soc)
+
+TASK [Definir ruta local del docker-compose a replicar para este rol] **********
+ok: [pv-infra-master]
+ok: [pv-infra-noc]
+ok: [pv-infra-soc]
+
+TASK [Comprobar que existe el docker-compose local para este rol] **************
+ok: [pv-infra-master -> localhost]
+ok: [pv-infra-soc -> localhost]
+ok: [pv-infra-noc -> localhost]
+
+TASK [Fallar si no existe el docker-compose local para este rol] ***************
+skipping: [pv-infra-master]
+skipping: [pv-infra-noc]
+skipping: [pv-infra-soc]
+
+TASK [Copiar docker-compose.yml correspondiente al rol] ************************
+ok: [pv-infra-noc]
+ok: [pv-infra-soc]
+changed: [pv-infra-master]
+
+TASK [Levantar stack con docker compose (pull + up -d)] ************************
+fatal: [pv-infra-master]: FAILED! => {"changed": true, "cmd": "set -e\ncd \"/opt/stacks/master\"\ndocker compose pull\ndocker compose up -d\n", "delta": "0:00:00.014204", "end": "2025-11-18 01:32:08.467169", "msg": "non-zero return code", "rc": 1, "start": "2025-11-18 01:32:08.452965", "stderr": "docker: unknown command: docker compose\n\nRun 'docker --help' for more information", "stderr_lines": ["docker: unknown command: docker compose", "", "Run 'docker --help' for more information"], "stdout": "", "stdout_lines": []}
+fatal: [pv-infra-soc]: FAILED! => {"changed": true, "cmd": "set -e\ncd \"/opt/stacks/soc\"\ndocker compose pull\ndocker compose up -d\n", "delta": "0:00:00.015767", "end": "2025-11-18 01:32:08.454246", "msg": "non-zero return code", "rc": 1, "start": "2025-11-18 01:32:08.438479", "stderr": "docker: unknown command: docker compose\n\nRun 'docker --help' for more information", "stderr_lines": ["docker: unknown command: docker compose", "", "Run 'docker --help' for more information"], "stdout": "", "stdout_lines": []}
+fatal: [pv-infra-noc]: FAILED! => {"changed": true, "cmd": "set -e\ncd \"/opt/stacks/noc\"\ndocker compose pull\ndocker compose up -d\n", "delta": "0:00:00.015300", "end": "2025-11-18 01:32:08.446377", "msg": "non-zero return code", "rc": 1, "start": "2025-11-18 01:32:08.431077", "stderr": "docker: unknown command: docker compose\n\nRun 'docker --help' for more information", "stderr_lines": ["docker: unknown command: docker compose", "", "Run 'docker --help' for more information"], "stdout": "", "stdout_lines": []}
+
+PLAY RECAP *********************************************************************
+pv-infra-master            : ok=8    changed=1    unreachable=0    failed=1    skipped=1    rescued=0    ignored=0   
+pv-infra-noc               : ok=8    changed=0    unreachable=0    failed=1    skipped=1    rescued=0    ignored=0   
+pv-infra-soc               : ok=8    changed=0    unreachable=0    failed=1    skipped=1    rescued=0    ignored=0   
+
+==== [Tue Nov 18 01:33:01 UTC 2025] Comprobando cambios en Git ====
+No hay cambios nuevos en origin/main. Nada que desplegar.
