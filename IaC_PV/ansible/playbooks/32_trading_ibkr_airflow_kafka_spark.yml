@@ -1,19 +1,5 @@
 ---
-# ansible/playbooks/32_trading_ibkr_airflow_kafka_spark.yml
-#
-# Infra PV:
-# - pv-infra-master: IBKR Gateway
-# - pv-infra-noc: Airflow (single container) + init db + admin user
-# - pv-infra-soc: Kafka + Zookeeper + Spark (bitnami/spark:3.5.4)
-#
-# Requisitos:
-# - Playbook 21 ya instaló docker + docker-compose (v1) en los nodos.
-# - Secrets en: ansible/inventories/infra/group_vars/trading_secrets.yml (vault)
-# - Template IBKR: /home/pvinfra/infra_pv/IaC_PV/ansible/ansible/templates/ibkr.env.j2
-#
-# Nota importante:
-# - En tus hosts, "docker compose" v2 NO está disponible (rc=1) y sí "docker-compose" (rc=0).
-#   Por eso este playbook usa docker-compose siempre.
+# 32_trading_ibkr_airflow_kafka_spark.yml
 
 - name: "32 - Desplegar contenedor IBKR en nodo master"
   hosts: pv-infra-master
@@ -25,9 +11,10 @@
 
   vars:
     ibkr_stack_base: "/opt/stacks/master/ibkr"
-    ibkr_image: "ghcr.io/gnzsnz/ib-gateway:latest"
-    ibkr_container_name: "ibkr-gateway"
     ibkr_compose_file: "{{ ibkr_stack_base }}/docker-compose.yml"
+    ibkr_env_file: "{{ ibkr_stack_base }}/env/ibkr.env"
+    ibkr_container_name: "ibkr-gateway"
+    ibkr_image: "ghcr.io/gnzsnz/ib-gateway:latest"
 
   tasks:
     - name: Crear carpeta base para stack IBKR
@@ -50,11 +37,10 @@
         - "{{ ibkr_stack_base }}/logs"
         - "{{ ibkr_stack_base }}/env"
 
-    # OJO: tu template está en /ansible/ansible/templates (según tu salida)
     - name: Crear archivo .env real para IBKR desde plantilla
       ansible.builtin.template:
-        src: "/home/pvinfra/infra_pv/IaC_PV/ansible/ansible/templates/ibkr.env.j2"
-        dest: "{{ ibkr_stack_base }}/env/ibkr.env"
+        src: "../ansible/templates/ibkr.env.j2"
+        dest: "{{ ibkr_env_file }}"
         owner: root
         group: root
         mode: "0600"
@@ -68,21 +54,21 @@
         content: |
           version: "3.8"
           services:
-            {{ ibkr_container_name }}:
+            ibkr-gateway:
               image: {{ ibkr_image }}
               container_name: {{ ibkr_container_name }}
               restart: unless-stopped
               env_file:
                 - ./env/ibkr.env
-              ports:
-                - "4001:4001"   # TWS/IB Gateway API (paper/live depende config)
-                - "4002:4002"   # opcional
-                - "5900:5900"   # VNC si la imagen lo expone
               volumes:
                 - ./config:/config
                 - ./logs:/logs
+              ports:
+                - "4001:4001"
+                - "4002:4002"
               networks:
                 - ibkr_net
+
           networks:
             ibkr_net:
               driver: bridge
@@ -118,14 +104,20 @@
     airflow_compose_file: "{{ airflow_base_dir }}/docker-compose.yml"
     airflow_container_name: "airflow"
     airflow_image: "apache/airflow:2.10.2"
-
-    # Airflow en Docker suele usar 50000:0 o 50000:50000.
-    # Tus evidencias muestran owner 50000 y group 50000 en /opt/stacks/noc/airflow.
     airflow_uid: "50000"
     airflow_gid: "50000"
 
-    # Puerto publicado en el host (ajústalo si quieres 8080)
-    airflow_host_port: "8081"
+    airflow_env_file: "{{ airflow_base_dir }}/env/airflow.env"
+
+    airflow_host_port_preferred: "8081"
+    airflow_host_port_fallback: "8082"
+
+    # Defaults (si no están en trading_secrets.yml)
+    airflow_admin_username: "{{ airflow_admin_username | default('admin') }}"
+    airflow_admin_password: "{{ airflow_admin_password | default('admin') }}"
+    airflow_admin_firstname: "{{ airflow_admin_firstname | default('Admin') }}"
+    airflow_admin_lastname: "{{ airflow_admin_lastname | default('User') }}"
+    airflow_admin_email: "{{ airflow_admin_email | default('admin@example.com') }}"
 
   tasks:
     - name: Crear carpeta base para stack Airflow
@@ -150,21 +142,15 @@
         - "{{ airflow_base_dir }}/plugins"
         - "{{ airflow_base_dir }}/env"
 
-    # >>> FIX CLAVE: Fernet válido y persistente <<<
-    # Genera un Fernet key correcto y lo deja en env/airflow.env con 0600.
-    # Requiere python3 + cryptography en el HOST. Si no existe, verás error y habrá que instalarlo.
-    - name: Generar AIRFLOW__CORE__FERNET_KEY si no existe (archivo env/airflow.env)
+    - name: Crear AIRFLOW__CORE__FERNET_KEY si no existe (env/airflow.env) usando openssl
       ansible.builtin.shell: |
         set -e
-        ENV_FILE="{{ airflow_base_dir }}/env/airflow.env"
+        ENV_FILE="{{ airflow_env_file }}"
         if [ ! -f "$ENV_FILE" ]; then
-          FERNET=$(python3 - <<'PY'
-from cryptography.fernet import Fernet
-print(Fernet.generate_key().decode())
-PY
-)
+          # 32 bytes -> base64 urlsafe (Airflow Fernet requirement)
+          KEY="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
           cat > "$ENV_FILE" <<EOF
-AIRFLOW__CORE__FERNET_KEY=${FERNET}
+AIRFLOW__CORE__FERNET_KEY=${KEY}
 EOF
           chmod 600 "$ENV_FILE"
           chown {{ airflow_uid }}:{{ airflow_gid }} "$ENV_FILE"
@@ -172,7 +158,34 @@ EOF
       args:
         executable: /bin/bash
 
-    - name: Crear docker-compose de Airflow (single container + SQLite) con env_file (fernet)
+    - name: Detener stack Airflow previo (si existe)
+      ansible.builtin.command:
+        cmd: docker-compose -f "{{ airflow_compose_file }}" down
+      args:
+        chdir: "{{ airflow_base_dir }}"
+      register: airflow_down
+      failed_when: false
+      changed_when: airflow_down.rc == 0
+
+    - name: Forzar eliminación del contenedor Airflow (por si quedó huérfano y ocupando puertos)
+      ansible.builtin.command:
+        cmd: docker rm -f "{{ airflow_container_name }}"
+      register: airflow_rm
+      failed_when: false
+      changed_when: airflow_rm.rc == 0
+
+    - name: Detectar si el puerto preferido ya está ocupado
+      ansible.builtin.shell: |
+        set -e
+        docker ps --format '{{"{{"}}.Ports{{"}}"}} {{"{{"}}.Names{{"}}"}}' | grep -q ":{{ airflow_host_port_preferred }}->" && echo "BUSY" || echo "FREE"
+      register: port_check
+      changed_when: false
+
+    - name: Elegir puerto final para Airflow (fallback si está ocupado)
+      ansible.builtin.set_fact:
+        airflow_host_port: "{{ airflow_host_port_fallback if port_check.stdout.strip() == 'BUSY' else airflow_host_port_preferred }}"
+
+    - name: Crear docker-compose de Airflow (single container + SQLite) con puerto elegido
       ansible.builtin.copy:
         dest: "{{ airflow_compose_file }}"
         owner: "{{ airflow_uid }}"
@@ -193,7 +206,6 @@ EOF
                 AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "sqlite:////opt/airflow/airflow.db"
                 AIRFLOW__CORE__LOAD_EXAMPLES: "False"
                 AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
-                # Si quieres setear timezone:
                 AIRFLOW__CORE__DEFAULT_TIMEZONE: "America/Costa_Rica"
               volumes:
                 - ./dags:/opt/airflow/dags
@@ -203,18 +215,10 @@ EOF
                 - "{{ airflow_host_port }}:8080"
               networks:
                 - airflow_noc_net
+
           networks:
             airflow_noc_net:
               driver: bridge
-
-    - name: Detener stack Airflow previo (si existe)
-      ansible.builtin.command:
-        cmd: docker-compose -f "{{ airflow_compose_file }}" down
-      args:
-        chdir: "{{ airflow_base_dir }}"
-      register: airflow_down
-      failed_when: false
-      changed_when: airflow_down.rc == 0
 
     - name: Desplegar stack Airflow con docker-compose
       ansible.builtin.command:
@@ -224,63 +228,52 @@ EOF
       register: airflow_up
       changed_when: airflow_up.rc == 0
 
-    - name: Esperar a que el contenedor Airflow esté "Up"
+    - name: Esperar a que el contenedor Airflow esté corriendo
       ansible.builtin.shell: |
         set -e
-        docker ps --format '{{"{{"}}.Names{{"}}"}} {{ "{{"{{"}}.Status{{"}}"}}' | grep -E '^{{ airflow_container_name }}\s+Up'
+        docker inspect -f '{{"{{"}}.State.Running{{"}}"}}' "{{ airflow_container_name }}"
       register: airflow_running
-      retries: 10
-      delay: 3
-      until: airflow_running.rc == 0
+      retries: 15
+      delay: 2
+      until: airflow_running.stdout.strip() == "true"
       changed_when: false
 
-    # Airflow 2.10 recomienda migrate en vez de init
-    - name: Migrar DB de Airflow (airflow db migrate)
+    - name: Inicializar/Migrar DB de Airflow (airflow db migrate)
       ansible.builtin.command:
         cmd: docker exec "{{ airflow_container_name }}" airflow db migrate
       register: airflow_db_migrate
       retries: 10
-      delay: 6
+      delay: 3
       until: airflow_db_migrate.rc == 0
       changed_when: true
 
-    # Crear admin desde secrets (si no está definido, cae a defaults seguros)
-    - name: Definir credenciales admin de Airflow con defaults si no vienen en secrets
-      ansible.builtin.set_fact:
-        airflow_admin_username_eff: "{{ airflow_admin_username | default('admin') }}"
-        airflow_admin_password_eff: "{{ airflow_admin_password | default('admin') }}"
-        airflow_admin_email_eff: "{{ airflow_admin_email | default('admin@example.com') }}"
-        airflow_admin_firstname_eff: "{{ airflow_admin_firstname | default('Admin') }}"
-        airflow_admin_lastname_eff: "{{ airflow_admin_lastname | default('User') }}"
-
-    - name: Crear usuario admin si no existe (idempotente)
+    - name: Crear/actualizar usuario admin de Airflow (si no existe)
       ansible.builtin.shell: |
         set -e
-        if docker exec "{{ airflow_container_name }}" airflow users list | awk '{print $2}' | grep -qx "{{ airflow_admin_username_eff }}"; then
-          echo "User exists"
-        else
-          docker exec "{{ airflow_container_name }}" airflow users create \
-            --username "{{ airflow_admin_username_eff }}" \
-            --password "{{ airflow_admin_password_eff }}" \
-            --firstname "{{ airflow_admin_firstname_eff }}" \
-            --lastname "{{ airflow_admin_lastname_eff }}" \
-            --role "Admin" \
-            --email "{{ airflow_admin_email_eff }}"
-        fi
+        # Si existe, lo dejamos; si no, lo creamos
+        docker exec "{{ airflow_container_name }}" airflow users list | grep -q "^{{ airflow_admin_username }}\b" && exit 0
+
+        docker exec "{{ airflow_container_name }}" airflow users create \
+          --username "{{ airflow_admin_username }}" \
+          --password "{{ airflow_admin_password }}" \
+          --firstname "{{ airflow_admin_firstname }}" \
+          --lastname "{{ airflow_admin_lastname }}" \
+          --role Admin \
+          --email "{{ airflow_admin_email }}"
       args:
         executable: /bin/bash
-      register: airflow_admin_create
-      changed_when: "'User exists' not in airflow_admin_create.stdout"
+      changed_when: true
 
-    - name: Mostrar URL de Airflow
+    - name: Mostrar URL final de Airflow + credenciales
       ansible.builtin.debug:
         msg:
           - "Airflow UI: http://{{ ansible_host }}:{{ airflow_host_port }}"
-          - "Usuario: {{ airflow_admin_username_eff }}"
-          - "Password: (definida en vault trading_secrets.yml o default 'admin')"
+          - "User: {{ airflow_admin_username }}"
+          - "Pass: {{ airflow_admin_password }}"
+          - "Nota: si 8081 estaba ocupado, se usó 8082 automáticamente."
 
 
-- name: "32 - Desplegar Kafka + Zookeeper + Spark (SOC)"
+- name: "32 - Desplegar Kafka + Spark (SOC)"
   hosts: pv-infra-soc
   become: true
   gather_facts: true
@@ -288,12 +281,6 @@ EOF
   vars:
     streaming_base_dir: "/opt/stacks/soc/streaming"
     streaming_compose_file: "{{ streaming_base_dir }}/docker-compose.yml"
-
-    kafka_image: "confluentinc/cp-kafka:latest"
-    zk_image: "confluentinc/cp-zookeeper:latest"
-
-    # FIX: bitnami/spark:latest no existe; usa un tag existente
-    spark_image: "bitnami/spark:3.5.4"
 
   tasks:
     - name: Crear carpeta base para stack de streaming / cómputo
@@ -318,7 +305,7 @@ EOF
         - "{{ streaming_base_dir }}/spark/jobs/backtest"
         - "{{ streaming_base_dir }}/spark/config"
 
-    - name: Crear docker-compose para Kafka + Zookeeper + Spark
+    - name: Crear docker-compose para Kafka + Spark
       ansible.builtin.copy:
         dest: "{{ streaming_compose_file }}"
         owner: root
@@ -327,35 +314,28 @@ EOF
         content: |
           version: "3.8"
           services:
-            zookeeper:
-              image: {{ zk_image }}
-              container_name: zookeeper
-              restart: unless-stopped
-              environment:
-                ZOOKEEPER_CLIENT_PORT: 2181
-                ZOOKEEPER_TICK_TIME: 2000
-              ports:
-                - "2181:2181"
-
             kafka:
-              image: {{ kafka_image }}
+              image: bitnami/kafka:latest
               container_name: kafka
               restart: unless-stopped
-              depends_on:
-                - zookeeper
+              environment:
+                - KAFKA_CFG_NODE_ID=0
+                - KAFKA_CFG_PROCESS_ROLES=broker,controller
+                - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+                - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+                - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://{{ ansible_host }}:9092
+                - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+                - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+                - ALLOW_PLAINTEXT_LISTENER=yes
               ports:
                 - "9092:9092"
-              environment:
-                KAFKA_BROKER_ID: 1
-                KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
-                KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092"
-                KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://{{ ansible_host }}:9092"
-                KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
               volumes:
-                - ./kafka/data:/var/lib/kafka/data
+                - ./kafka/data:/bitnami/kafka
+              networks:
+                - streaming_net
 
             spark-master:
-              image: {{ spark_image }}
+              image: bitnami/spark:latest
               container_name: spark-master
               restart: unless-stopped
               environment:
@@ -363,22 +343,24 @@ EOF
               ports:
                 - "7077:7077"
                 - "8080:8080"
-              volumes:
-                - ./spark/jobs:/opt/spark/jobs
+              networks:
+                - streaming_net
 
             spark-worker:
-              image: {{ spark_image }}
+              image: bitnami/spark:latest
               container_name: spark-worker
               restart: unless-stopped
-              depends_on:
-                - spark-master
               environment:
                 - SPARK_MODE=worker
                 - SPARK_MASTER_URL=spark://spark-master:7077
-              ports:
-                - "8082:8081"
-              volumes:
-                - ./spark/jobs:/opt/spark/jobs
+              depends_on:
+                - spark-master
+              networks:
+                - streaming_net
+
+          networks:
+            streaming_net:
+              driver: bridge
 
     - name: Detener stack Kafka + Spark previo (si existe)
       ansible.builtin.command:
@@ -396,11 +378,3 @@ EOF
         chdir: "{{ streaming_base_dir }}"
       register: streaming_up
       changed_when: streaming_up.rc == 0
-
-    - name: Mostrar endpoints SOC
-      ansible.builtin.debug:
-        msg:
-          - "Kafka: {{ ansible_host }}:9092"
-          - "Zookeeper: {{ ansible_host }}:2181"
-          - "Spark Master UI: http://{{ ansible_host }}:8080"
-          - "Spark Worker UI: http://{{ ansible_host }}:8082"
