@@ -37,7 +37,7 @@
 
     - name: Crear archivo .env real para IBKR desde plantilla
       ansible.builtin.template:
-        src: "../ansible/templates/ibkr.env.j2"
+        src: "ibkr.env.j2"
         dest: "{{ ibkr_stack_base }}/env/ibkr.env"
         owner: root
         group: root
