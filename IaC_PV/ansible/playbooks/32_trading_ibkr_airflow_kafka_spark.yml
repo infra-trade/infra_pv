@@ -121,7 +121,7 @@
         - "{{ airflow_base_dir }}/logs"
         - "{{ airflow_base_dir }}/plugins"
 
-    - name: Crear docker-compose de Airflow (modo simple / SequentialExecutor)
+    - name: Crear docker-compose de Airflow (simple / SequentialExecutor)
       ansible.builtin.copy:
         dest: "{{ airflow_compose_file }}"
         owner: "50000"
@@ -137,7 +137,6 @@
               restart: unless-stopped
               environment:
                 - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
-                - AIRFLOW__CORE__FERNET_KEY=please_change_me
                 - AIRFLOW__CORE__LOAD_EXAMPLES=False
                 - AIRFLOW__WEBSERVER__RBAC=True
                 - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
@@ -173,16 +172,31 @@
       args:
         chdir: "{{ airflow_base_dir }}"
 
+    - name: Esperar a que el contenedor Airflow esté corriendo
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' airflow
+      register: airflow_running
+      retries: 30
+      delay: 2
+      until: airflow_running.stdout.strip() == "true"
+      changed_when: false
+
+    - name: Esperar a que Airflow responda dentro del contenedor
+      ansible.builtin.command: docker exec airflow airflow version
+      register: airflow_version_cmd
+      retries: 30
+      delay: 3
+      until: airflow_version_cmd.rc == 0
+      changed_when: false
+
     - name: Inicializar DB de Airflow (airflow db init)
-      ansible.builtin.command: >
-        docker exec airflow airflow db init
+      ansible.builtin.command: docker exec airflow airflow db init
       register: airflow_db_init
       retries: 10
       delay: 6
       until: airflow_db_init.rc == 0
       changed_when: true
 
-    - name: Crear/actualizar usuario admin de Airflow desde secrets
+    - name: Crear/actualizar usuario admin de Airflow desde secrets (idempotente)
       ansible.builtin.command: >
         docker exec airflow airflow users create
         --username {{ airflow_admin_username | default('admin') }}
@@ -194,6 +208,9 @@
       register: airflow_user_create
       failed_when: >
         airflow_user_create.rc != 0
+        and "already exists" not in airflow_user_create.stderr
+      changed_when: >
+        airflow_user_create.rc == 0
         and "already exists" not in airflow_user_create.stderr
 
 ########################################################################
