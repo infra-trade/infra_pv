@@ -7,7 +7,6 @@
   hosts: pv-infra-master
   become: true
 
-  # Secretos (IBKR, Airflow, etc.)
   vars_files:
     - "../inventories/infra/group_vars/trading_secrets.yml"
 
@@ -38,7 +37,7 @@
 
     - name: Crear archivo .env real para IBKR desde plantilla
       ansible.builtin.template:
-        src: "../templates/ibkr.env.j2"
+        src: "../ansible/templates/ibkr.env.j2"
         dest: "{{ ibkr_stack_base }}/env/ibkr.env"
         owner: root
         group: root
@@ -93,7 +92,6 @@
   hosts: pv-infra-noc
   become: true
 
-  # Usamos también los secretos para usuario admin de Airflow
   vars_files:
     - "../inventories/infra/group_vars/trading_secrets.yml"
 
@@ -153,7 +151,6 @@
                 - "8081:8080"
               command: >
                 bash -c "
-                airflow db upgrade &&
                 airflow webserver
                 "
 
@@ -176,25 +173,24 @@
       args:
         chdir: "{{ airflow_base_dir }}"
 
-    - name: Esperar a que la DB de Airflow esté lista
+    - name: Inicializar DB de Airflow (airflow db init)
       ansible.builtin.command: >
-        docker exec airflow airflow db check
-      register: airflow_db_check
-      retries: 20
-      delay: 10
-      until: airflow_db_check.rc == 0
-      changed_when: false
-      failed_when: false
+        docker exec airflow airflow db init
+      register: airflow_db_init
+      retries: 10
+      delay: 6
+      until: airflow_db_init.rc == 0
+      changed_when: true
 
     - name: Crear/actualizar usuario admin de Airflow desde secrets
       ansible.builtin.command: >
         docker exec airflow airflow users create
-        --username {{ airflow_admin_username }}
-        --password {{ airflow_admin_password }}
+        --username {{ airflow_admin_username | default('admin') }}
+        --password {{ airflow_admin_password | default('admin') }}
         --firstname Admin
         --lastname User
         --role Admin
-        --email {{ airflow_admin_email }}
+        --email {{ airflow_admin_email | default('admin@example.com') }}
       register: airflow_user_create
       failed_when: >
         airflow_user_create.rc != 0
