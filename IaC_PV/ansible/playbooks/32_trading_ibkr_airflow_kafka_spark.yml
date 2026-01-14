@@ -12,7 +12,7 @@
 
   vars:
     ibkr_stack_dir: "{{ replication_dest }}/ibkr"
-    ibkr_image: "your-ibkr-gateway-image:latest"       # AJUSTA ESTA IMAGEN
+    ibkr_image: "ghcr.io/gnzsnz/ib-gateway:latest"       # AJUSTA ESTA IMAGEN
     ibkr_container_name: "ibkr-gateway"
     ibkr_api_port: 4001                                 # puerto API expuesto
     docker_compose_cmd: "docker-compose"                # usamos v1
