@@ -1,5 +1,5 @@
 ---
-- name: Crear VMs de infraestructura en vCenter desde PV-INFRA-IaC (Tier B MAX)
+- name: Crear/actualizar VMs de infraestructura en vCenter (Tier B MAX) con apagado si requiere aumento
   hosts: localhost
   gather_facts: false
   connection: local
@@ -10,7 +10,6 @@
   vars:
     infra_ssh_user: "pvinfra"
 
-    # Tier B (MAX) por rol:
     infra_vms:
       - name: pv-infra-master
         ip: "192.168.5.85"
@@ -40,11 +39,27 @@
       - "192.168.10.2"
       - "8.8.8.8"
 
-    # Si tu template soporta customization y VMware Tools:
+    # si deseas esperar customization y tools:
     wait_for_ip_address: false
 
   tasks:
-    - name: Crear/actualizar VMs de infraestructura (clonar template), aplicar HW y ENCENDERLAS
+    # 1) Apagar VM (para permitir aumentar CPU/RAM/DISK sin HotAdd)
+    - name: Apagar VM antes de aumentar recursos (idempotente)
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "{{ vm_folder }}"
+        name: "{{ item.name }}"
+        state: poweredoff
+      loop: "{{ infra_vms }}"
+      delegate_to: localhost
+      failed_when: false
+
+    # 2) Aplicar HW + red + encender
+    - name: Crear/actualizar VM (clonar si no existe) + aplicar HW/NET y encender
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -56,17 +71,17 @@
         folder: "{{ vm_folder }}"
 
         name: "{{ item.name }}"
-        state: poweredon
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
+
+        # Ojo: state poweredon para que al final quede arriba
+        state: poweredon
 
         hardware:
           num_cpus: "{{ item.cpu }}"
           memory_mb: "{{ item.memory_mb }}"
           scsi: paravirtual
 
-        # Intento de ajustar el disco principal al tamaño objetivo
-        # (si tu template tiene un solo disco y permite expansión).
         disk:
           - size_gb: "{{ item.disk_gb }}"
             type: thin
@@ -84,29 +99,26 @@
       loop: "{{ infra_vms }}"
       delegate_to: localhost
 
-    - name: Registrar hosts clonados en inventario en memoria
+    - name: Registrar hosts clonados/actualizados en inventario en memoria
       ansible.builtin.add_host:
         name: "{{ item.name }}"
-        groups:
-          - pv_infra_temp
+        groups: [ "pv_infra_temp" ]
         ansible_host: "{{ item.ip }}"
         ansible_user: "{{ infra_ssh_user }}"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
       loop: "{{ infra_vms }}"
 
-    - name: Mostrar resumen de VMs clonadas
+    - name: Mostrar resumen
       ansible.builtin.debug:
         msg: >-
-          VM {{ item.name }} clonada desde {{ vm_source_name }}
-          en carpeta {{ vm_folder }}, datastore {{ vm_datastore }},
-          IP {{ item.ip }} en {{ vm_network }}.
-          HW => CPU={{ item.cpu }} | MEM={{ item.memory_mb }}MB | DISK={{ item.disk_gb }}GB
+          {{ item.name }} => IP={{ item.ip }}
+          CPU={{ item.cpu }} MEM={{ item.memory_mb }}MB DISK={{ item.disk_gb }}GB
       loop: "{{ infra_vms }}"
 
 # ======================================================================
 # Segundo play: instalar llave SSH y sudo sin contraseña en las VMs
 # ======================================================================
-- name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas
+- name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas/actualizadas
   hosts: pv_infra_temp
   gather_facts: false
   become: true
@@ -120,29 +132,29 @@
       ansible.builtin.wait_for:
         host: "{{ ansible_host | default(inventory_hostname) }}"
         port: 22
-        delay: 15
+        delay: 10
         timeout: 900
         state: started
       delegate_to: localhost
 
-    - name: Dar tiempo extra al sistema para terminar el arranque
+    - name: Pausa corta para estabilizar arranque
       ansible.builtin.pause:
-        seconds: 30
+        seconds: 20
 
-    - name: Autorizar llave pública del nodo Ansible (crea .ssh automáticamente)
+    - name: Autorizar llave pública (crea .ssh)
       ansible.posix.authorized_key:
         user: "{{ ansible_user }}"
         state: present
         key: "{{ ssh_public_key }}"
         manage_dir: true
 
-    - name: Asegurar que el usuario está en el grupo sudo
+    - name: Asegurar que el usuario está en sudo
       ansible.builtin.user:
         name: "{{ ansible_user }}"
         groups: "sudo"
         append: true
 
-    - name: Permitir sudo sin contraseña para el usuario
+    - name: Sudo sin contraseña
       ansible.builtin.copy:
         dest: "/etc/sudoers.d/99-{{ ansible_user }}-nopasswd"
         content: "{{ ansible_user }} ALL=(ALL) NOPASSWD:ALL\n"
