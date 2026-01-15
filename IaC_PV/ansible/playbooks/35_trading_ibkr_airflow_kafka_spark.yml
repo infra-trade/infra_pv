@@ -2,11 +2,6 @@
 ########################################################################
 # 35 - IBKR en MASTER (VNC), Airflow plataforma en NOC (Postgres + LocalExecutor + Scheduler + keys persistentes + Admin asegurado),
 #      Kafka (KRaft) + Spark + Kafka UI + Observabilidad en SOC
-#
-# Infra (según tus playbooks 20/21):
-# - pv-infra-master: 192.168.5.85 (Portainer Server) + IBKR
-# - pv-infra-noc:    192.168.5.86 (Airflow)
-# - pv-infra-soc:    192.168.5.87 (Kafka/Spark/Obs)
 ########################################################################
 
 ###############################################################################
@@ -113,7 +108,7 @@
         chdir: "{{ ibkr_stack_base }}"
 
 ###############################################################################
-# 35 - Airflow plataforma en NOC (fix: airflow-cli para admin/migraciones)
+# 35 - Airflow plataforma en NOC (orden correcto: init DB antes de webserver)
 ###############################################################################
 - name: 35 - Desplegar Airflow plataforma en NOC (Postgres + LocalExecutor + Scheduler + Keys + Admin asegurado)
   hosts: pv-infra-noc
@@ -135,7 +130,7 @@
     airflow_secret_key_file: "{{ airflow_env_dir }}/airflow_webserver_secret_key.txt"
     airflow_fernet_key_file: "{{ airflow_env_dir }}/airflow_fernet_key.txt"
 
-    # tuning para evitar inestabilidad
+    # tuning para estabilidad
     airflow_webserver_workers_value: "1"
     airflow_shm_size_value: "512m"
 
@@ -187,7 +182,7 @@
         - "{{ airflow_base_dir }}/plugins"
 
     ####################################################################
-    # Keys persistentes (sin depender de cryptography en el host)
+    # Keys persistentes
     ####################################################################
     - name: Verificar si existe AIRFLOW webserver secret key persistente
       ansible.builtin.stat:
@@ -240,9 +235,10 @@
         airflow_fernet_key: "{{ (fernet_key_slurp.content | b64decode).strip() }}"
 
     ####################################################################
-    # Compose Airflow Plataforma (incluye airflow-cli para admin/migraciones)
+    # Compose (incluye airflow-cli, pero NO levantamos webserver/scheduler
+    # hasta inicializar la DB)
     ####################################################################
-    - name: Crear docker-compose de Airflow (Postgres + LocalExecutor + webserver + scheduler + cli + keys)
+    - name: Crear docker-compose de Airflow (Postgres + LocalExecutor + cli + webserver + scheduler)
       ansible.builtin.copy:
         dest: "{{ airflow_compose_file }}"
         owner: "{{ airflow_uid }}"
@@ -289,6 +285,13 @@
                 timeout: 5s
                 retries: 15
 
+            airflow-cli:
+              <<: *airflow-common
+              container_name: airflow-cli
+              entrypoint: /bin/bash
+              command: ["-lc", "sleep infinity"]
+              restart: unless-stopped
+
             airflow-webserver:
               <<: *airflow-common
               container_name: airflow-webserver
@@ -301,20 +304,13 @@
                 interval: 10s
                 timeout: 5s
                 retries: 30
-                start_period: 30s
+                start_period: 45s
 
             airflow-scheduler:
               <<: *airflow-common
               container_name: airflow-scheduler
               shm_size: "{{ airflow_shm_size_value }}"
               command: scheduler
-
-            airflow-cli:
-              <<: *airflow-common
-              container_name: airflow-cli
-              entrypoint: /bin/bash
-              command: ["-lc", "sleep infinity"]
-              restart: unless-stopped
 
           volumes:
             postgres_data:
@@ -329,18 +325,19 @@
       failed_when: false
       changed_when: false
 
-    - name: Detener stack Airflow previo (si existe) y limpiar orphans
+    - name: Bajar stack Airflow previo (si existe) y limpiar orphans
       ansible.builtin.command:
         cmd: "{{ compose_cmd }} -f {{ airflow_compose_file }} down --remove-orphans"
       args:
         chdir: "{{ airflow_base_dir }}"
-      register: airflow_down_result
+      register: airflow_down
       failed_when: false
-      changed_when: airflow_down_result.rc == 0
+      changed_when: airflow_down.rc == 0
 
-    - name: Desplegar stack Airflow con compose
+    # 1) SUBIR SOLO postgres + cli
+    - name: Levantar SOLO postgres + airflow-cli (primero inicializamos DB)
       ansible.builtin.command:
-        cmd: "{{ compose_cmd }} -f {{ airflow_compose_file }} up -d"
+        cmd: "{{ compose_cmd }} -f {{ airflow_compose_file }} up -d postgres airflow-cli"
       args:
         chdir: "{{ airflow_base_dir }}"
 
@@ -353,7 +350,7 @@
       until: pg_health.stdout.strip() == "healthy"
       changed_when: false
 
-    - name: Esperar que airflow-cli esté running (para comandos administrativos)
+    - name: Esperar que airflow-cli esté running
       ansible.builtin.command:
         cmd: docker inspect -f '{{ "{{" }}.State.Status{{ "}}" }}' airflow-cli
       register: cli_status
@@ -361,6 +358,76 @@
       delay: 2
       until: cli_status.stdout.strip() == "running"
       changed_when: false
+
+    # 2) Inicializar DB (si hace falta) + migrar
+    - name: Comprobar si DB Airflow ya está inicializada (airflow db check)
+      ansible.builtin.command:
+        cmd: docker exec airflow-cli airflow db check
+      register: db_check
+      failed_when: false
+      changed_when: false
+
+    - name: Inicializar DB Airflow (solo si db check falla)
+      ansible.builtin.command:
+        cmd: docker exec airflow-cli airflow db init
+      when: db_check.rc != 0
+      register: db_init
+      retries: 10
+      delay: 6
+      until: db_init.rc == 0
+      changed_when: true
+
+    - name: Ejecutar migraciones Airflow (idempotente)
+      ansible.builtin.command:
+        cmd: docker exec airflow-cli airflow db migrate
+      register: db_migrate
+      retries: 10
+      delay: 6
+      until: db_migrate.rc == 0
+      changed_when: db_migrate.rc == 0
+
+    # 3) Crear/asegurar admin antes de levantar webserver/scheduler
+    - name: Listar usuarios Airflow
+      ansible.builtin.command:
+        cmd: docker exec airflow-cli airflow users list
+      register: airflow_users_list
+      failed_when: false
+      changed_when: false
+
+    - name: Crear usuario admin si no existe
+      ansible.builtin.command: >
+        docker exec airflow-cli airflow users create
+        --username {{ airflow_admin_username | default('admin') }}
+        --password {{ airflow_admin_password | default('admin') }}
+        --firstname Admin
+        --lastname User
+        --role Admin
+        --email {{ airflow_admin_email | default('admin@example.com') }}
+      register: admin_create
+      when: >
+        ('No data found' in (airflow_users_list.stdout | default('')))
+        or ((airflow_admin_username | default('admin')) not in (airflow_users_list.stdout | default('')))
+      retries: 10
+      delay: 6
+      until: admin_create.rc == 0
+      changed_when: admin_create.rc == 0
+      failed_when: false
+
+    - name: Forzar password del admin (idempotente)
+      ansible.builtin.command: >
+        docker exec airflow-cli airflow users reset-password
+        --username {{ airflow_admin_username | default('admin') }}
+        --password {{ airflow_admin_password | default('admin') }}
+      register: admin_reset
+      failed_when: false
+      changed_when: admin_reset.rc == 0
+
+    # 4) AHORA SÍ subir webserver + scheduler
+    - name: Levantar airflow-webserver + airflow-scheduler
+      ansible.builtin.command:
+        cmd: "{{ compose_cmd }} -f {{ airflow_compose_file }} up -d airflow-webserver airflow-scheduler"
+      args:
+        chdir: "{{ airflow_base_dir }}"
 
     - name: Esperar que airflow-webserver esté healthy (/health)
       ansible.builtin.command:
@@ -378,11 +445,14 @@
         echo "==== docker ps (airflow) ===="
         docker ps --format "table {{'{{'}}.Names{{'}}'}}\t{{'{{'}}.Status{{'}}'}}\t{{'{{'}}.Ports{{'}}'}}" | egrep "airflow-webserver|airflow-scheduler|airflow-postgres|airflow-cli" || true
         echo ""
-        echo "==== logs airflow-webserver (tail 250) ===="
-        docker logs --tail 250 airflow-webserver || true
+        echo "==== logs airflow-webserver (tail 300) ===="
+        docker logs --tail 300 airflow-webserver || true
         echo ""
-        echo "==== logs airflow-scheduler (tail 250) ===="
-        docker logs --tail 250 airflow-scheduler || true
+        echo "==== logs airflow-scheduler (tail 300) ===="
+        docker logs --tail 300 airflow-scheduler || true
+        echo ""
+        echo "==== logs airflow-cli (tail 200) ===="
+        docker logs --tail 200 airflow-cli || true
         echo ""
         echo "==== inspect airflow-webserver ===="
         docker inspect airflow-webserver --format 'Status={{"{{"}}.State.Status{{"}}"}} RestartCount={{"{{"}}.RestartCount{{"}}"}} OOMKilled={{"{{"}}.State.OOMKilled{{"}}"}} ExitCode={{"{{"}}.State.ExitCode{{"}}"}} Health={{"{{"}}.State.Health.Status{{"}}"}}'
@@ -391,61 +461,6 @@
       when: ws_health.stdout.strip() != "healthy"
       failed_when: true
       changed_when: false
-
-    - name: Ejecutar migraciones Airflow desde airflow-cli (idempotente)
-      ansible.builtin.command:
-        cmd: docker exec airflow-cli airflow db migrate
-      register: airflow_migrate
-      retries: 10
-      delay: 6
-      until: airflow_migrate.rc == 0
-      changed_when: airflow_migrate.rc == 0
-
-    - name: Listar usuarios Airflow desde airflow-cli
-      ansible.builtin.command:
-        cmd: docker exec airflow-cli airflow users list
-      register: airflow_users_list
-      failed_when: false
-      changed_when: false
-
-    - name: Crear usuario admin si no existe (desde airflow-cli)
-      ansible.builtin.command: >
-        docker exec airflow-cli airflow users create
-        --username {{ airflow_admin_username | default('admin') }}
-        --password {{ airflow_admin_password | default('admin') }}
-        --firstname Admin
-        --lastname User
-        --role Admin
-        --email {{ airflow_admin_email | default('admin@example.com') }}
-      register: airflow_admin_create
-      when: >
-        ('No data found' in (airflow_users_list.stdout | default('')))
-        or ((airflow_admin_username | default('admin')) not in (airflow_users_list.stdout | default('')))
-      retries: 10
-      delay: 6
-      until: airflow_admin_create.rc == 0 or ("already exists" in (airflow_admin_create.stderr | default('')))
-      failed_when: >
-        airflow_admin_create.rc != 0
-        and "already exists" not in (airflow_admin_create.stderr | default(''))
-      changed_when: airflow_admin_create.rc == 0
-
-    - name: Forzar password del admin (idempotente, desde airflow-cli)
-      ansible.builtin.command: >
-        docker exec airflow-cli airflow users reset-password
-        --username {{ airflow_admin_username | default('admin') }}
-        --password {{ airflow_admin_password | default('admin') }}
-      register: airflow_reset_pwd
-      failed_when: false
-      changed_when: airflow_reset_pwd.rc == 0
-
-    - name: Reiniciar webserver y scheduler
-      ansible.builtin.command:
-        cmd: "{{ compose_cmd }} -f {{ airflow_compose_file }} restart airflow-webserver airflow-scheduler"
-      args:
-        chdir: "{{ airflow_base_dir }}"
-      register: airflow_restart
-      failed_when: false
-      changed_when: airflow_restart.rc == 0
 
 ###############################################################################
 # 35 - Kafka (KRaft) + Spark + Kafka UI + Observabilidad en SOC
@@ -457,11 +472,7 @@
   vars:
     streaming_base_dir: /opt/stacks/soc/streaming
     streaming_compose_file: "{{ streaming_base_dir }}/docker-compose.yml"
-
-    # SOC real (según tu inventario / playbook 20)
     soc_host_ip: "192.168.5.87"
-
-    # Tu cluster id generado:
     kafka_cluster_id: "ZHeJ4mbEQqO8SSZ2fEXbFQ"
 
   tasks:
@@ -564,7 +575,6 @@
         mode: "0644"
         content: |
           version: "3.8"
-
           services:
             kafka:
               image: confluentinc/cp-kafka:latest
@@ -576,15 +586,12 @@
                 KAFKA_PROCESS_ROLES: "broker,controller"
                 KAFKA_NODE_ID: 1
                 KAFKA_CLUSTER_ID: "{{ kafka_cluster_id }}"
-
                 KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
                 KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-
                 KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
                 KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://{{ soc_host_ip }}:9092"
                 KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT"
                 KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
-
                 KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
                 KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
                 KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
