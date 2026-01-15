@@ -1,5 +1,5 @@
 ---
-- name: Crear VMs de infraestructura Tier B (NUEVAS) en vCenter desde PV-INFRA-IaC
+- name: Crear VMs de infraestructura Tier B (RE-CREATE) en vCenter desde PV-INFRA-IaC
   hosts: localhost
   gather_facts: false
   connection: local
@@ -10,7 +10,6 @@
   vars:
     infra_ssh_user: "pvinfra"
 
-    # NUEVAS VMs Tier B (no toca las existentes)
     infra_vms:
       - name: pv-infra-master-b
         ip: "192.168.5.185"
@@ -41,7 +40,41 @@
       - "8.8.8.8"
 
   tasks:
-    - name: Crear VMs Tier B (clonar template) y ENCENDERLAS
+    #####################################################################
+    # 0) Apagar + eliminar si existe (para que el clon sea limpio)
+    #####################################################################
+    - name: Apagar VM -b si existe (no falla si no existe)
+      community.vmware.vmware_guest_powerstate:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ item.name }}"
+        state: powered-off
+        force: true
+      loop: "{{ infra_vms }}"
+      delegate_to: localhost
+      failed_when: false
+
+    - name: Eliminar VM -b si existe (no falla si no existe)
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "{{ vm_folder }}"
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ infra_vms }}"
+      delegate_to: localhost
+      failed_when: false
+
+    #####################################################################
+    # 1) Clonar APAGADA aplicando HW/DISK/NET (evita hotadd)
+    #####################################################################
+    - name: Clonar VM Tier B (apagada) aplicando recursos
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -53,9 +86,9 @@
         folder: "{{ vm_folder }}"
 
         name: "{{ item.name }}"
-        state: poweredon
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
+        state: poweredoff
 
         hardware:
           num_cpus: "{{ item.cpu }}"
@@ -79,27 +112,35 @@
       loop: "{{ infra_vms }}"
       delegate_to: localhost
 
-    - name: Registrar hosts clonados en inventario en memoria
+    #####################################################################
+    # 2) Encender
+    #####################################################################
+    - name: Encender VMs Tier B
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        cluster: "{{ vcenter_cluster }}"
+        folder: "{{ vm_folder }}"
+        name: "{{ item.name }}"
+        state: poweredon
+        wait_for_ip_address: false
+      loop: "{{ infra_vms }}"
+      delegate_to: localhost
+
+    - name: Registrar hosts en inventario en memoria
       ansible.builtin.add_host:
         name: "{{ item.name }}"
-        groups:
-          - pv_infra_temp
+        groups: [ "pv_infra_temp" ]
         ansible_host: "{{ item.ip }}"
         ansible_user: "{{ infra_ssh_user }}"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
       loop: "{{ infra_vms }}"
 
-    - name: Mostrar resumen de VMs clonadas
-      ansible.builtin.debug:
-        msg: >-
-          VM {{ item.name }} (Tier B) clonada desde {{ vm_source_name }}
-          en carpeta {{ vm_folder }}, datastore {{ vm_datastore }},
-          IP {{ item.ip }} en {{ vm_network }}.
-          CPU={{ item.cpu }} MEM={{ item.memory_mb }}MB DISK={{ item.disk_gb }}GB
-      loop: "{{ infra_vms }}"
-
 # ======================================================================
-# Segundo play: instalar llave SSH y sudo sin contraseña en las VMs
+# Segundo play (igual al tuyo)
 # ======================================================================
 - name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs Tier B clonadas
   hosts: pv_infra_temp
