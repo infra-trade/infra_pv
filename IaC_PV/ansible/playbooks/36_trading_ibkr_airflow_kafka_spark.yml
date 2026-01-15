@@ -148,8 +148,8 @@
     airflow_compose_file: "{{ airflow_stack_dir }}/docker-compose.yml"
     airflow_env_dir: "{{ airflow_stack_dir }}/env"
 
-    airflow_image: "{{ airflow_image | default('apache/airflow:2.10.2') }}"
-    airflow_postgres_image: "{{ airflow_postgres_image | default('postgres:15') }}"
+    airflow_image: "apache/airflow:2.9.3"
+    airflow_postgres_image: "postgres:15"
 
     airflow_port: "{{ airflow_port | default('8081') }}"
 
