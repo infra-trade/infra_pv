@@ -24,9 +24,9 @@
     ibkr_container_name: "ibkr-gateway"
 
     # Puertos
-    ibkr_vnc_port: "{{ ibkr_vnc_port | default('5900') }}"
-    ibkr_gateway_port: "{{ ibkr_gateway_port | default('4002') }}"
-    ibkr_api_port: "{{ ibkr_api_port | default('4001') }}"
+    ibkr_vnc_port: "5900"
+    ibkr_gateway_port: "4002"
+    ibkr_api_port: "4001"
 
     # >>> FIX: usar variables NUEVAS para evitar loops del inventario <<<
     ibkr_user_value: "{{ ibkr_user_secret | default('IBKR_USER') }}"
