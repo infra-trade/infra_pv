@@ -1,5 +1,5 @@
 ---
-- name: Crear VMs de infraestructura Tier B (RE-CREATE) en vCenter desde PV-INFRA-IaC
+- name: Crear VMs Tier B (clone-only) en vCenter desde PV-INFRA-IaC (sin tocar HW por compatibilidad)
   hosts: localhost
   gather_facts: false
   connection: local
@@ -10,24 +10,16 @@
   vars:
     infra_ssh_user: "pvinfra"
 
+    # Puedes usar mismos nombres o sufijo -b
     infra_vms:
       - name: pv-infra-master-b
         ip: "192.168.5.185"
-        cpu: 4
-        memory_mb: 16384
-        disk_gb: 160
 
       - name: pv-infra-noc-b
         ip: "192.168.5.186"
-        cpu: 8
-        memory_mb: 32768
-        disk_gb: 500
 
       - name: pv-infra-soc-b
         ip: "192.168.5.187"
-        cpu: 16
-        memory_mb: 65536
-        disk_gb: 2000
 
     vm_source_name: "PV-INFRA-IaC"
     vm_folder: "PV_IaC"
@@ -40,41 +32,7 @@
       - "8.8.8.8"
 
   tasks:
-    #####################################################################
-    # 0) Apagar + eliminar si existe (para que el clon sea limpio)
-    #####################################################################
-    - name: Apagar VM -b si existe (no falla si no existe)
-      community.vmware.vmware_guest_powerstate:
-        hostname: "{{ vcenter_hostname }}"
-        username: "{{ vcenter_username }}"
-        password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-        datacenter: "{{ vcenter_datacenter }}"
-        name: "{{ item.name }}"
-        state: powered-off
-        force: true
-      loop: "{{ infra_vms }}"
-      delegate_to: localhost
-      failed_when: false
-
-    - name: Eliminar VM -b si existe (no falla si no existe)
-      community.vmware.vmware_guest:
-        hostname: "{{ vcenter_hostname }}"
-        username: "{{ vcenter_username }}"
-        password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-        datacenter: "{{ vcenter_datacenter }}"
-        folder: "{{ vm_folder }}"
-        name: "{{ item.name }}"
-        state: absent
-      loop: "{{ infra_vms }}"
-      delegate_to: localhost
-      failed_when: false
-
-    #####################################################################
-    # 1) Clonar APAGADA aplicando HW/DISK/NET (evita hotadd)
-    #####################################################################
-    - name: Clonar VM Tier B (apagada) aplicando recursos
+    - name: Crear/actualizar VMs (clonar template) y ENCENDERLAS (sin modificar CPU/RAM/DISK)
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -86,19 +44,9 @@
         folder: "{{ vm_folder }}"
 
         name: "{{ item.name }}"
+        state: poweredon
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
-        state: poweredoff
-
-        hardware:
-          num_cpus: "{{ item.cpu }}"
-          memory_mb: "{{ item.memory_mb }}"
-          scsi: paravirtual
-
-        disk:
-          - size_gb: "{{ item.disk_gb }}"
-            type: thin
-            datastore: "{{ vm_datastore }}"
 
         networks:
           - name: "{{ vm_network }}"
@@ -112,25 +60,7 @@
       loop: "{{ infra_vms }}"
       delegate_to: localhost
 
-    #####################################################################
-    # 2) Encender
-    #####################################################################
-    - name: Encender VMs Tier B
-      community.vmware.vmware_guest:
-        hostname: "{{ vcenter_hostname }}"
-        username: "{{ vcenter_username }}"
-        password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-        datacenter: "{{ vcenter_datacenter }}"
-        cluster: "{{ vcenter_cluster }}"
-        folder: "{{ vm_folder }}"
-        name: "{{ item.name }}"
-        state: poweredon
-        wait_for_ip_address: false
-      loop: "{{ infra_vms }}"
-      delegate_to: localhost
-
-    - name: Registrar hosts en inventario en memoria
+    - name: Registrar hosts clonados en inventario en memoria
       ansible.builtin.add_host:
         name: "{{ item.name }}"
         groups: [ "pv_infra_temp" ]
@@ -140,9 +70,9 @@
       loop: "{{ infra_vms }}"
 
 # ======================================================================
-# Segundo play (igual al tuyo)
+# Segundo play: llave SSH + sudo (igual)
 # ======================================================================
-- name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs Tier B clonadas
+- name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas
   hosts: pv_infra_temp
   gather_facts: false
   become: true
@@ -165,19 +95,12 @@
       ansible.builtin.pause:
         seconds: 30
 
-    - name: Crear carpeta .ssh si no existe
-      ansible.builtin.file:
-        path: "/home/{{ ansible_user }}/.ssh"
-        state: directory
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        mode: "0700"
-
     - name: Autorizar llave pública del nodo Ansible
       ansible.posix.authorized_key:
         user: "{{ ansible_user }}"
         state: present
         key: "{{ ssh_public_key }}"
+        manage_dir: true
 
     - name: Asegurar que el usuario está en el grupo sudo
       ansible.builtin.user:
