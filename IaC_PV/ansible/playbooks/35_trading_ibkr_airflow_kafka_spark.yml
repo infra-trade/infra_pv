@@ -106,17 +106,15 @@
     airflow_compose_file: "{{ airflow_base_dir }}/docker-compose.yml"
     airflow_uid: "50000"
 
-    # DB creds (ideal: en Vault dentro de trading_secrets.yml)
     airflow_db_user: "{{ airflow_postgres_user | default('airflow') }}"
     airflow_db_password: "{{ airflow_postgres_password | default('airflow') }}"
     airflow_db_name: "{{ airflow_postgres_db | default('airflow') }}"
 
-    # Persistencia de keys
     airflow_env_dir: "{{ airflow_base_dir }}/env"
     airflow_secret_key_file: "{{ airflow_env_dir }}/airflow_webserver_secret_key.txt"
     airflow_fernet_key_file: "{{ airflow_env_dir }}/airflow_fernet_key.txt"
 
-    # Anti-OOM (valores fijos por defecto; si luego quieres tunearlos, cambia aquí)
+    # Anti-OOM (defaults fijos)
     airflow_webserver_workers_value: "1"
     airflow_shm_size_value: "512m"
 
@@ -151,7 +149,7 @@
         - "{{ airflow_base_dir }}/plugins"
 
     ####################################################################
-    # Keys persistentes (idempotente)
+    # Keys persistentes
     ####################################################################
     - name: Verificar si existe AIRFLOW webserver secret key persistente
       ansible.builtin.stat:
@@ -226,11 +224,9 @@
               - AIRFLOW_UID={{ airflow_uid }}
               - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://{{ airflow_db_user }}:{{ airflow_db_password }}@postgres:5432/{{ airflow_db_name }}
 
-              # Keys persistentes
               - AIRFLOW__WEBSERVER__SECRET_KEY={{ airflow_webserver_secret_key }}
               - AIRFLOW__CORE__FERNET_KEY={{ airflow_fernet_key }}
 
-              # Anti-OOM
               - AIRFLOW__WEBSERVER__WORKERS={{ airflow_webserver_workers_value }}
 
             volumes:
@@ -304,9 +300,64 @@
       ansible.builtin.command:
         cmd: docker inspect -f '{{ "{{" }}.State.Health.Status{{ "}}" }}' airflow-postgres
       register: pg_health
-      retries: 30
+      retries: 40
       delay: 3
       until: pg_health.stdout.strip() == "healthy"
+      changed_when: false
+
+    - name: Esperar que airflow-webserver esté en estado running
+      ansible.builtin.command:
+        cmd: docker inspect -f '{{ "{{" }}.State.Status{{ "}}" }}' airflow-webserver
+      register: ws_status
+      retries: 60
+      delay: 2
+      until: ws_status.stdout.strip() == "running"
+      changed_when: false
+
+    - name: Esperar que airflow-webserver NO esté reiniciando (RestartCount estable)
+      ansible.builtin.shell: |
+        set -e
+        r1=$(docker inspect airflow-webserver --format '{{"{{"}}.RestartCount{{"}}"}}')
+        sleep 6
+        r2=$(docker inspect airflow-webserver --format '{{"{{"}}.RestartCount{{"}}"}}')
+        echo "$r1 $r2"
+      args:
+        executable: /bin/bash
+      register: ws_stable
+      retries: 20
+      delay: 3
+      until: ws_stable.stdout.split()[0] == ws_stable.stdout.split()[1]
+      changed_when: false
+
+    - name: Validar que airflow-webserver no esté en loop de reinicios (OOMKilled / RestartCount)
+      ansible.builtin.shell: |
+        set -e
+        docker inspect airflow-webserver --format 'Status={{"{{"}}.State.Status{{"}}"}} RestartCount={{"{{"}}.RestartCount{{"}}"}} OOMKilled={{"{{"}}.State.OOMKilled{{"}}"}} ExitCode={{"{{"}}.State.ExitCode{{"}}"}}'
+      args:
+        executable: /bin/bash
+      register: ws_health_line
+      changed_when: false
+
+    - name: Mostrar estado airflow-webserver (debug)
+      ansible.builtin.debug:
+        msg: "{{ ws_health_line.stdout }}"
+
+    - name: Si airflow-webserver sigue reiniciando, mostrar logs y fallar
+      ansible.builtin.shell: |
+        set -e
+        echo "==== docker ps (airflow) ===="
+        docker ps --format "table {{'{{'}}.Names{{'}}'}}\t{{'{{'}}.Status{{'}}'}}\t{{'{{'}}.Ports{{'}}'}}" | egrep "airflow-webserver|airflow-scheduler|airflow-postgres" || true
+        echo ""
+        echo "==== logs airflow-webserver (tail 200) ===="
+        docker logs --tail 200 airflow-webserver || true
+        echo ""
+        echo "==== inspect airflow-webserver ===="
+        docker inspect airflow-webserver --format 'Status={{"{{"}}.State.Status{{"}}"}} RestartCount={{"{{"}}.RestartCount{{"}}"}} OOMKilled={{"{{"}}.State.OOMKilled{{"}}"}} ExitCode={{"{{"}}.State.ExitCode{{"}}"}}'
+      args:
+        executable: /bin/bash
+      register: ws_logs_dump
+      when: "'restarting' in (ws_health_line.stdout | lower)"
+      failed_when: true
       changed_when: false
 
     - name: Esperar que Airflow CLI responda en webserver
@@ -324,21 +375,6 @@
       register: airflow_migrate
       failed_when: false
       changed_when: airflow_migrate.rc == 0
-
-    - name: Esperar que airflow-webserver esté estable (sin reinicios)
-      ansible.builtin.shell: |
-        set -e
-        r1=$(docker inspect airflow-webserver --format '{{"{{"}}.RestartCount{{"}}"}}')
-        sleep 5
-        r2=$(docker inspect airflow-webserver --format '{{"{{"}}.RestartCount{{"}}"}}')
-        echo "$r1 $r2"
-      args:
-        executable: /bin/bash
-      register: ws_stable
-      retries: 12
-      delay: 5
-      until: ws_stable.stdout.split()[0] == ws_stable.stdout.split()[1]
-      changed_when: false
 
     - name: Listar usuarios Airflow
       ansible.builtin.command:
@@ -361,7 +397,7 @@
       when: >
         ('No data found' in (airflow_users_list.stdout | default('')))
         or ((airflow_admin_username | default('admin')) not in (airflow_users_list.stdout | default('')))
-      retries: 5
+      retries: 10
       delay: 6
       until: airflow_admin_create.rc == 0 or ("already exists" in (airflow_admin_create.stderr | default('')))
       failed_when: >
@@ -369,7 +405,7 @@
         and "already exists" not in (airflow_admin_create.stderr | default(''))
       changed_when: airflow_admin_create.rc == 0
 
-    - name: "Forzar password del admin (idempotente: resetea a lo del vault)"
+    - name: Forzar password del admin (idempotente)
       ansible.builtin.command: >
         docker exec airflow-webserver airflow users reset-password
         --username {{ airflow_admin_username | default('admin') }}
