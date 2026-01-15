@@ -450,7 +450,7 @@
         dest: "{{ streaming_compose_file }}"
         owner: root
         group: root
-       mode: "0644"
+        mode: "0644"
         content: |
           version: "3.8"
 
