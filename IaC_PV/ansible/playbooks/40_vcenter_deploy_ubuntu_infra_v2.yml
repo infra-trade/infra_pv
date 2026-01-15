@@ -1,5 +1,5 @@
 ---
-- name: Crear VMs de infraestructura en vCenter desde PV-INFRA-IaC (Tier B)
+- name: Crear VMs de infraestructura en vCenter desde PV-INFRA-IaC (Tier B - stable)
   hosts: localhost
   gather_facts: false
   connection: local
@@ -42,10 +42,50 @@
 
   tasks:
     #####################################################################
-    # FASE 1: Asegurar que la VM quede APAGADA y aplicar HW/DISK/NET
-    # (Evita cpuHotAdd / memHotAdd)
+    # 0) APAGAR por nombre (sin folder) y forzar
     #####################################################################
-    - name: Crear/actualizar VMs de infraestructura (clonar template) y DEJARLAS APAGADAS para aplicar recursos
+    - name: Apagar VM por nombre (si existe) - evita hotadd
+      community.vmware.vmware_guest_powerstate:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ item.name }}"
+        state: powered-off
+        force: true
+      loop: "{{ infra_vms }}"
+      delegate_to: localhost
+      failed_when: false
+
+    # Espera "poweredOff" real antes de tocar HW
+    - name: Esperar a que la VM esté apagada (si existe)
+      community.vmware.vmware_guest_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ item.name }}"
+      loop: "{{ infra_vms }}"
+      register: vm_infos
+      delegate_to: localhost
+      failed_when: false
+      changed_when: false
+
+    - name: Validar apagado si la VM existe
+      ansible.builtin.assert:
+        that:
+          - "(item.instance is not defined) or (item.instance.hw_power_status in ['poweredOff', 'poweredoff', 'POWERED_OFF'])"
+        fail_msg: "La VM {{ item.item.name }} existe pero NO quedó apagada; no es seguro cambiar CPU/RAM sin hotadd."
+        success_msg: "OK: {{ item.item.name }} apagada (o no existe)."
+      loop: "{{ vm_infos.results }}"
+      changed_when: false
+
+    #####################################################################
+    # 1) Crear/actualizar (clonar) con HW/NET/DISK estando apagada
+    #####################################################################
+    - name: Crear/actualizar VM (clonar template) aplicando Tier B (apagada)
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -61,14 +101,11 @@
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
 
-        # Aplicar Tier B aquí (apagada)
         hardware:
           num_cpus: "{{ item.cpu }}"
           memory_mb: "{{ item.memory_mb }}"
           scsi: paravirtual
 
-        # Intento de ajustar el disco principal al tamaño deseado
-        # (si el template permite resize; si no, luego te doy variante "2do disco")
         disk:
           - size_gb: "{{ item.disk_gb }}"
             type: thin
@@ -87,22 +124,17 @@
       delegate_to: localhost
 
     #####################################################################
-    # FASE 2: Encender (ya con recursos aplicados)
+    # 2) Encender
     #####################################################################
-    - name: Encender VMs ya con Tier B aplicado
-      community.vmware.vmware_guest:
+    - name: Encender VMs
+      community.vmware.vmware_guest_powerstate:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-
         datacenter: "{{ vcenter_datacenter }}"
-        cluster: "{{ vcenter_cluster }}"
-        folder: "{{ vm_folder }}"
-
         name: "{{ item.name }}"
-        state: poweredon
-        wait_for_ip_address: false
+        state: powered-on
       loop: "{{ infra_vms }}"
       delegate_to: localhost
 
@@ -116,13 +148,10 @@
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
       loop: "{{ infra_vms }}"
 
-    - name: Mostrar resumen de VMs clonadas
+    - name: Mostrar resumen
       ansible.builtin.debug:
         msg: >-
-          VM {{ item.name }} clonada/actualizada desde {{ vm_source_name }}
-          en carpeta {{ vm_folder }}, datastore {{ vm_datastore }},
-          IP {{ item.ip }} en {{ vm_network }}.
-          TIER_B => CPU={{ item.cpu }} MEM={{ item.memory_mb }}MB DISK={{ item.disk_gb }}GB
+          {{ item.name }} => IP={{ item.ip }} | CPU={{ item.cpu }} | MEM={{ item.memory_mb }}MB | DISK={{ item.disk_gb }}GB
       loop: "{{ infra_vms }}"
 
 # ======================================================================
