@@ -1,5 +1,5 @@
 ---
-- name: Crear/actualizar VMs de infraestructura en vCenter (Tier B MAX) - poweroff/reconfigure/poweron
+- name: "40v2_3 - Deploy/Resize Infra VMs (Tier B MAX) - lookup VM -> poweroff -> resize -> poweron"
   hosts: localhost
   gather_facts: false
   connection: local
@@ -10,6 +10,7 @@
   vars:
     infra_ssh_user: "pvinfra"
 
+    # Tier B MAX
     infra_vms:
       - name: pv-infra-master
         ip: "192.168.5.85"
@@ -30,7 +31,7 @@
         disk_gb: 2000
 
     vm_source_name: "PV-INFRA-IaC"
-    vm_folder: "PV_IaC"
+    vm_folder: "PV_IaC"            # <- se usa solo para CREAR
     vm_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
     vm_network: "VLAN-5"
     vm_netmask: "255.255.255.0"
@@ -39,26 +40,67 @@
       - "192.168.10.2"
       - "8.8.8.8"
 
-    # Folder con ruta completa (muy importante)
-    vm_folder_full: "/{{ vcenter_datacenter }}/vm/{{ vm_folder }}"
-
   tasks:
-    - name: Apagar VM (forzado) para permitir aumentar CPU/RAM/DISK (si existe)
+    #####################################################################
+    # 1) Descubrir si la VM existe realmente y obtener UUID
+    #####################################################################
+    - name: "Lookup VM info (por nombre) para decidir si apagar/redimensionar"
+      community.vmware.vmware_guest_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        name: "{{ item.name }}"
+      loop: "{{ infra_vms }}"
+      register: vm_info_results
+      delegate_to: localhost
+      failed_when: false
+      changed_when: false
+
+    - name: "Construir lista con exists/uuid por VM"
+      ansible.builtin.set_fact:
+        infra_vms_resolved: >-
+          {{
+            infra_vms_resolved | default([]) + [
+              item.item | combine({
+                'vm_exists': (item.instance is defined),
+                'vm_uuid': (item.instance.uuid if (item.instance is defined and item.instance.uuid is defined) else ''),
+                'vm_power_state': (item.instance.hw_power_status if (item.instance is defined and item.instance.hw_power_status is defined) else '')
+              })
+            ]
+          }}
+      loop: "{{ vm_info_results.results }}"
+
+    - name: "Debug existencia/uuid (para validar que encuentra la VM correcta)"
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.name }} exists={{ item.vm_exists }}
+          uuid={{ item.vm_uuid | default('') }}
+          power={{ item.vm_power_state | default('') }}
+      loop: "{{ infra_vms_resolved }}"
+
+    #####################################################################
+    # 2) Apagar SOLO las VMs existentes (sin depender de folder)
+    #####################################################################
+    - name: "Power off VM si existe (para evitar cpuHotAdd/memHotAdd)"
       community.vmware.vmware_guest_powerstate:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs | default(false) }}"
         datacenter: "{{ vcenter_datacenter }}"
-        folder: "{{ vm_folder_full }}"
-        name: "{{ item.name }}"
+        uuid: "{{ item.vm_uuid }}"
         state: powered-off
         force: true
-      loop: "{{ infra_vms }}"
+      loop: "{{ infra_vms_resolved }}"
+      when: item.vm_exists and (item.vm_uuid | length > 0)
       delegate_to: localhost
-      failed_when: false
 
-    - name: Crear/actualizar VM (clonar si no existe) con HW + red (sin encender aún)
+    #####################################################################
+    # 3) Crear nuevas VMs (si no existen) con el HW final desde template
+    #####################################################################
+    - name: "Crear VM (si NO existe) desde template con HW/NET final"
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -67,11 +109,10 @@
 
         datacenter: "{{ vcenter_datacenter }}"
         cluster: "{{ vcenter_cluster }}"
-        folder: "{{ vm_folder_full }}"
-
+        folder: "{{ vm_folder }}"          # solo creación
         name: "{{ item.name }}"
-        state: present
 
+        state: poweredon
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
 
@@ -80,8 +121,6 @@
           memory_mb: "{{ item.memory_mb }}"
           scsi: paravirtual
 
-        # Si el template tiene 1 disco, esto intenta crecerlo.
-        # Si tu template tiene más discos o el grow no aplica, luego te doy opción "agregar 2do disco".
         disk:
           - size_gb: "{{ item.disk_gb }}"
             type: thin
@@ -94,42 +133,77 @@
             netmask: "{{ vm_netmask }}"
             gateway: "{{ vm_gateway }}"
             dns_servers: "{{ vm_dns_servers }}"
-      loop: "{{ infra_vms }}"
+      loop: "{{ infra_vms_resolved }}"
+      when: not item.vm_exists
       delegate_to: localhost
 
-    - name: Encender VM luego de aplicar recursos
+    #####################################################################
+    # 4) Reconfigurar VMs existentes ya apagadas (por UUID)
+    #####################################################################
+    - name: "Reconfigurar VM existente (apagada) a Tier B MAX por UUID"
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+
+        datacenter: "{{ vcenter_datacenter }}"
+        uuid: "{{ item.vm_uuid }}"
+        state: present
+
+        hardware:
+          num_cpus: "{{ item.cpu }}"
+          memory_mb: "{{ item.memory_mb }}"
+          scsi: paravirtual
+
+        disk:
+          - size_gb: "{{ item.disk_gb }}"
+            type: thin
+            datastore: "{{ vm_datastore }}"
+
+        networks:
+          - name: "{{ vm_network }}"
+            type: static
+            ip: "{{ item.ip }}"
+            netmask: "{{ vm_netmask }}"
+            gateway: "{{ vm_gateway }}"
+            dns_servers: "{{ vm_dns_servers }}"
+      loop: "{{ infra_vms_resolved }}"
+      when: item.vm_exists and (item.vm_uuid | length > 0)
+      delegate_to: localhost
+
+    #####################################################################
+    # 5) Encender VMs existentes luego de reconfigurar
+    #####################################################################
+    - name: "Power on VM existente (por UUID)"
       community.vmware.vmware_guest_powerstate:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs | default(false) }}"
         datacenter: "{{ vcenter_datacenter }}"
-        folder: "{{ vm_folder_full }}"
-        name: "{{ item.name }}"
+        uuid: "{{ item.vm_uuid }}"
         state: powered-on
-      loop: "{{ infra_vms }}"
+      loop: "{{ infra_vms_resolved }}"
+      when: item.vm_exists and (item.vm_uuid | length > 0)
       delegate_to: localhost
 
-    - name: Registrar hosts en inventario en memoria
+    #####################################################################
+    # 6) Registrar hosts en memoria
+    #####################################################################
+    - name: "Registrar hosts en inventario en memoria"
       ansible.builtin.add_host:
         name: "{{ item.name }}"
         groups: [ "pv_infra_temp" ]
         ansible_host: "{{ item.ip }}"
         ansible_user: "{{ infra_ssh_user }}"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
-      loop: "{{ infra_vms }}"
-
-    - name: Resumen
-      ansible.builtin.debug:
-        msg: >-
-          {{ item.name }} => IP={{ item.ip }}
-          CPU={{ item.cpu }} MEM={{ item.memory_mb }}MB DISK={{ item.disk_gb }}GB
-      loop: "{{ infra_vms }}"
+      loop: "{{ infra_vms_resolved }}"
 
 # ======================================================================
 # Segundo play: instalar llave SSH y sudo sin contraseña en las VMs
 # ======================================================================
-- name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas/actualizadas
+- name: "40v2_3 - Bootstrap SSH + sudo nopasswd"
   hosts: pv_infra_temp
   gather_facts: false
   become: true
@@ -139,7 +213,7 @@
     ssh_public_key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_ed25519.pub') }}"
 
   tasks:
-    - name: Esperar SSH
+    - name: "Esperar SSH"
       ansible.builtin.wait_for:
         host: "{{ ansible_host | default(inventory_hostname) }}"
         port: 22
@@ -148,24 +222,24 @@
         state: started
       delegate_to: localhost
 
-    - name: Pausa corta
+    - name: "Pausa corta"
       ansible.builtin.pause:
         seconds: 20
 
-    - name: Autorizar llave pública (crea .ssh)
+    - name: "Autorizar llave pública"
       ansible.posix.authorized_key:
         user: "{{ ansible_user }}"
         state: present
         key: "{{ ssh_public_key }}"
         manage_dir: true
 
-    - name: Asegurar sudo
+    - name: "Asegurar sudo"
       ansible.builtin.user:
         name: "{{ ansible_user }}"
         groups: "sudo"
         append: true
 
-    - name: Sudo sin contraseña
+    - name: "Sudo sin contraseña"
       ansible.builtin.copy:
         dest: "/etc/sudoers.d/99-{{ ansible_user }}-nopasswd"
         content: "{{ ansible_user }} ALL=(ALL) NOPASSWD:ALL\n"
