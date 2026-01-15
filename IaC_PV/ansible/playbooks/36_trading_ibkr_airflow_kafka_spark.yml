@@ -24,7 +24,7 @@
     ibkr_container_name: "ibkr-gateway"
 
     # Puertos
-    ibkr_vnc_port: "5900"
+    ibkr_vnc_port_ref: "5900"
     ibkr_gateway_port: "4002"
     ibkr_api_port: "4001"
 
