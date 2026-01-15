@@ -1,3 +1,5 @@
 # No subir archivos con secretos
 *.env
 */env/*.env
+ansible/inventories/infra/group_vars/trading_secrets.yml
+ansible/inventories/infra/group_vars/trading_secrets.yml
