@@ -1,0 +1,515 @@
+---
+###############################################################################
+# 35v2 - IBKR en MASTER (VNC) - más estable y controlado
+###############################################################################
+- name: "35v2 - IBKR Gateway (MASTER)"
+  hosts: pv-infra-master
+  become: true
+
+  vars_files:
+    - "../inventories/infra/group_vars/trading_secrets.yml"
+
+  vars:
+    ibkr_base: /opt/stacks/master/ibkr
+    ibkr_compose: "{{ ibkr_base }}/docker-compose.yml"
+    ibkr_env: "{{ ibkr_base }}/env/ibkr.env"
+
+    # Seguridad: si quieres que VNC solo escuche local o red interna:
+    # "127.0.0.1:5900:5900" o "192.168.5.85:5900:5900"
+    vnc_bind: "0.0.0.0"
+    ibkr_image: "ghcr.io/gnzsnz/ib-gateway:stable"
+
+  tasks:
+    - name: "Crear dirs"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ ibkr_base }}"
+        - "{{ ibkr_base }}/config"
+        - "{{ ibkr_base }}/logs"
+        - "{{ ibkr_base }}/env"
+
+    - name: "Crear .env IBKR"
+      ansible.builtin.template:
+        src: "ibkr.env.j2"
+        dest: "{{ ibkr_env }}"
+        mode: "0600"
+
+    - name: "Compose IBKR (limits + logging)"
+      ansible.builtin.copy:
+        dest: "{{ ibkr_compose }}"
+        mode: "0644"
+        content: |
+          version: "3.8"
+          services:
+            ibkr-gateway:
+              image: {{ ibkr_image }}
+              container_name: ibkr-gateway
+              restart: unless-stopped
+              env_file:
+                - ./env/ibkr.env
+              ports:
+                - "4001:4001"
+                - "{{ vnc_bind }}:5900:5900"
+              volumes:
+                - ./logs:/opt/ibgateway/logs
+                - ./config:/opt/ibgateway/config
+              logging:
+                driver: "json-file"
+                options:
+                  max-size: "10m"
+                  max-file: "3"
+              deploy:
+                resources:
+                  limits:
+                    cpus: "1.50"
+                    memory: "2g"
+                  reservations:
+                    cpus: "0.50"
+                    memory: "512m"
+          networks:
+            default:
+              name: ibkr_net
+
+    - name: "Up IBKR"
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ ibkr_compose }} up -d"
+      args:
+        chdir: "{{ ibkr_base }}"
+
+###############################################################################
+# 35v2 - Airflow (NOC) escalable para 100 estrategias: CeleryExecutor + Redis
+###############################################################################
+- name: "35v2 - Airflow Plataforma (NOC) - CeleryExecutor"
+  hosts: pv-infra-noc
+  become: true
+
+  vars_files:
+    - "../inventories/infra/group_vars/trading_secrets.yml"
+
+  vars:
+    airflow_base: /opt/stacks/noc/airflow
+    airflow_compose: "{{ airflow_base }}/docker-compose.yml"
+    airflow_uid: "50000"
+
+    airflow_db_user: "{{ airflow_postgres_user | default('airflow') }}"
+    airflow_db_password: "{{ airflow_postgres_password | default('airflow') }}"
+    airflow_db_name: "{{ airflow_postgres_db | default('airflow') }}"
+
+    airflow_env_dir: "{{ airflow_base }}/env"
+    airflow_secret_key_file: "{{ airflow_env_dir }}/airflow_webserver_secret_key.txt"
+    airflow_fernet_key_file: "{{ airflow_env_dir }}/airflow_fernet_key.txt"
+
+    airflow_image: "apache/airflow:2.10.2"
+    redis_image: "redis:7.2-alpine"
+    postgres_image: "postgres:15"
+
+    # Ajustes para paralelismo ordenado
+    airflow_parallelism: "64"
+    airflow_dag_concurrency: "32"
+    airflow_max_active_runs: "4"
+
+    # Workers: escala horizontal para estrategias
+    airflow_workers: 3
+
+  tasks:
+    - name: "Dirs base"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ airflow_uid }}"
+        group: "{{ airflow_uid }}"
+        mode: "0775"
+      loop:
+        - "{{ airflow_base }}"
+        - "{{ airflow_env_dir }}"
+        - "{{ airflow_base }}/dags/prod"
+        - "{{ airflow_base }}/dags/backtest"
+        - "{{ airflow_base }}/logs"
+        - "{{ airflow_base }}/plugins"
+        - "{{ airflow_base }}/strategies"   # <- carpeta clave (100 estrategias)
+
+    - name: "Key webserver secret (si no existe)"
+      ansible.builtin.stat:
+        path: "{{ airflow_secret_key_file }}"
+      register: sk
+
+    - name: "Generar webserver secret key"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        openssl rand -hex 32 > "{{ airflow_secret_key_file }}"
+        chown {{ airflow_uid }}:{{ airflow_uid }} "{{ airflow_secret_key_file }}"
+        chmod 0600 "{{ airflow_secret_key_file }}"
+      args: { executable: /bin/bash }
+      when: not sk.stat.exists
+
+    - name: "Key fernet (si no existe)"
+      ansible.builtin.stat:
+        path: "{{ airflow_fernet_key_file }}"
+      register: fk
+
+    - name: "Generar fernet key"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        python3 - <<'PY' > "{{ airflow_fernet_key_file }}"
+        import os, base64
+        print(base64.urlsafe_b64encode(os.urandom(32)).decode())
+        PY
+        chown {{ airflow_uid }}:{{ airflow_uid }} "{{ airflow_fernet_key_file }}"
+        chmod 0600 "{{ airflow_fernet_key_file }}"
+      args: { executable: /bin/bash }
+      when: not fk.stat.exists
+
+    - name: "Slurp keys"
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - "{{ airflow_secret_key_file }}"
+        - "{{ airflow_fernet_key_file }}"
+      register: sl
+
+    - name: "Set facts keys"
+      ansible.builtin.set_fact:
+        airflow_webserver_secret_key: "{{ (sl.results[0].content | b64decode).strip() }}"
+        airflow_fernet_key: "{{ (sl.results[1].content | b64decode).strip() }}"
+
+    - name: "Compose Airflow Celery (Postgres + Redis + Web + Scheduler + Workers + CLI)"
+      ansible.builtin.copy:
+        dest: "{{ airflow_compose }}"
+        owner: "{{ airflow_uid }}"
+        group: "{{ airflow_uid }}"
+        mode: "0644"
+        content: |
+          version: "3.8"
+
+          x-airflow-common: &airflow-common
+            image: {{ airflow_image }}
+            restart: unless-stopped
+            environment:
+              - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+              - AIRFLOW__CORE__LOAD_EXAMPLES=False
+              - AIRFLOW__WEBSERVER__RBAC=True
+              - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
+              - AIRFLOW_UID={{ airflow_uid }}
+              - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://{{ airflow_db_user }}:{{ airflow_db_password }}@postgres:5432/{{ airflow_db_name }}
+              - AIRFLOW__CELERY__BROKER_URL=redis://redis:6379/0
+              - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://{{ airflow_db_user }}:{{ airflow_db_password }}@postgres:5432/{{ airflow_db_name }}
+              - AIRFLOW__WEBSERVER__SECRET_KEY={{ airflow_webserver_secret_key }}
+              - AIRFLOW__CORE__FERNET_KEY={{ airflow_fernet_key }}
+              - AIRFLOW__CORE__PARALLELISM={{ airflow_parallelism }}
+              - AIRFLOW__CORE__DAG_CONCURRENCY={{ airflow_dag_concurrency }}
+              - AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG={{ airflow_max_active_runs }}
+            volumes:
+              - ./dags/prod:/opt/airflow/dags/prod
+              - ./dags/backtest:/opt/airflow/dags/backtest
+              - ./logs:/opt/airflow/logs
+              - ./plugins:/opt/airflow/plugins
+              - ./strategies:/opt/airflow/strategies   # <- cada estrategia vive aquí con config
+            depends_on:
+              - postgres
+              - redis
+            logging:
+              driver: "json-file"
+              options:
+                max-size: "10m"
+                max-file: "3"
+
+          services:
+            postgres:
+              image: {{ postgres_image }}
+              container_name: airflow-postgres
+              restart: unless-stopped
+              environment:
+                - POSTGRES_USER={{ airflow_db_user }}
+                - POSTGRES_PASSWORD={{ airflow_db_password }}
+                - POSTGRES_DB={{ airflow_db_name }}
+              volumes:
+                - postgres_data:/var/lib/postgresql/data
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U {{ airflow_db_user }} -d {{ airflow_db_name }}"]
+                interval: 10s
+                timeout: 5s
+                retries: 15
+
+            redis:
+              image: {{ redis_image }}
+              container_name: airflow-redis
+              restart: unless-stopped
+
+            airflow-cli:
+              <<: *airflow-common
+              container_name: airflow-cli
+              entrypoint: /bin/bash
+              command: ["-lc", "sleep infinity"]
+
+            airflow-webserver:
+              <<: *airflow-common
+              container_name: airflow-webserver
+              ports:
+                - "8081:8080"
+              command: webserver
+              healthcheck:
+                test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+                interval: 10s
+                timeout: 5s
+                retries: 30
+                start_period: 45s
+
+            airflow-scheduler:
+              <<: *airflow-common
+              container_name: airflow-scheduler
+              command: scheduler
+
+            airflow-worker:
+              <<: *airflow-common
+              command: celery worker
+              deploy:
+                replicas: {{ airflow_workers }}
+                resources:
+                  limits:
+                    cpus: "2.0"
+                    memory: "4g"
+                  reservations:
+                    cpus: "0.5"
+                    memory: "1g"
+
+          volumes:
+            postgres_data:
+
+          networks:
+            default:
+              name: airflow_noc_net
+
+    - name: "Down previo"
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ airflow_compose }} down --remove-orphans"
+      args: { chdir: "{{ airflow_base }}" }
+      failed_when: false
+      changed_when: false
+
+    - name: "Up postgres + redis + cli (init fase)"
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ airflow_compose }} up -d postgres redis airflow-cli"
+      args: { chdir: "{{ airflow_base }}" }
+
+    - name: "Esperar Postgres healthy"
+      ansible.builtin.command:
+        cmd: "docker inspect -f '{{ \"{{\" }}.State.Health.Status{{ \"}}\" }}' airflow-postgres"
+      register: pg
+      retries: 60
+      delay: 3
+      until: pg.stdout.strip() == "healthy"
+      changed_when: false
+
+    - name: "Migraciones"
+      ansible.builtin.command:
+        cmd: "docker exec airflow-cli airflow db migrate"
+      register: mig
+      retries: 10
+      delay: 6
+      until: mig.rc == 0
+      changed_when: false
+
+    - name: "Asegurar admin (reset password)"
+      ansible.builtin.command: >
+        docker exec airflow-cli airflow users reset-password
+        --username {{ airflow_admin_username | default('admin') }}
+        --password {{ airflow_admin_password | default('admin') }}
+      failed_when: false
+      changed_when: false
+
+    - name: "Up webserver + scheduler + workers"
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ airflow_compose }} up -d airflow-webserver airflow-scheduler airflow-worker"
+      args: { chdir: "{{ airflow_base }}" }
+
+###############################################################################
+# 35v2 - Kafka + Spark + Observabilidad (SOC) versionado + tuning base
+###############################################################################
+- name: "35v2 - Streaming + Observabilidad (SOC)"
+  hosts: pv-infra-soc
+  become: true
+
+  vars:
+    streaming_base: /opt/stacks/soc/streaming
+    streaming_compose: "{{ streaming_base }}/docker-compose.yml"
+    soc_host_ip: "192.168.5.87"
+    kafka_cluster_id: "ZHeJ4mbEQqO8SSZ2fEXbFQ"
+
+    kafka_image: "confluentinc/cp-kafka:7.6.1"
+    kafka_ui_image: "provectuslabs/kafka-ui:v0.7.2"
+    kafka_exporter_image: "danielqsj/kafka-exporter:v1.8.0"
+    spark_master_image: "bitnami/spark:3.5.1"
+    prometheus_image: "prom/prometheus:v2.54.1"
+    grafana_image: "grafana/grafana-oss:11.1.4"
+
+  tasks:
+    - name: "Dirs"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ streaming_base }}"
+        - "{{ streaming_base }}/kafka/data"
+        - "{{ streaming_base }}/spark/jobs/prod"
+        - "{{ streaming_base }}/spark/jobs/backtest"
+        - "{{ streaming_base }}/monitoring/prometheus"
+        - "{{ streaming_base }}/monitoring/grafana/provisioning/datasources"
+        - "{{ streaming_base }}/monitoring/grafana/provisioning/dashboards"
+        - "{{ streaming_base }}/monitoring/grafana/dashboards"
+
+    - name: "Prometheus config"
+      ansible.builtin.copy:
+        dest: "{{ streaming_base }}/monitoring/prometheus/prometheus.yml"
+        mode: "0644"
+        content: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: "kafka_exporter"
+              static_configs:
+                - targets: ["kafka-exporter:9308"]
+
+    - name: "Grafana datasource"
+      ansible.builtin.copy:
+        dest: "{{ streaming_base }}/monitoring/grafana/provisioning/datasources/datasource.yml"
+        mode: "0644"
+        content: |
+          apiVersion: 1
+          datasources:
+            - name: Prometheus
+              type: prometheus
+              access: proxy
+              url: http://prometheus:9090
+              isDefault: true
+
+    - name: "Grafana dashboards provider"
+      ansible.builtin.copy:
+        dest: "{{ streaming_base }}/monitoring/grafana/provisioning/dashboards/provider.yml"
+        mode: "0644"
+        content: |
+          apiVersion: 1
+          providers:
+            - name: "Trading Dashboards"
+              orgId: 1
+              folder: "Trading"
+              type: file
+              options:
+                path: /var/lib/grafana/dashboards
+
+    - name: "Compose streaming"
+      ansible.builtin.copy:
+        dest: "{{ streaming_compose }}"
+        mode: "0644"
+        content: |
+          version: "3.8"
+          services:
+            kafka:
+              image: {{ kafka_image }}
+              container_name: kafka
+              restart: unless-stopped
+              ports:
+                - "9092:9092"
+              environment:
+                KAFKA_PROCESS_ROLES: "broker,controller"
+                KAFKA_NODE_ID: 1
+                KAFKA_CLUSTER_ID: "{{ kafka_cluster_id }}"
+                KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+                KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+                KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+                KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://{{ soc_host_ip }}:9092"
+                KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT"
+                KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+                KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+                KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+                KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+                KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+                KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+                KAFKA_HEAP_OPTS: "-Xms512m -Xmx512m"
+                KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+              volumes:
+                - ./kafka/data:/var/lib/kafka/data
+              logging:
+                driver: "json-file"
+                options: { max-size: "10m", max-file: "3" }
+
+            kafka-ui:
+              image: {{ kafka_ui_image }}
+              container_name: kafka-ui
+              restart: unless-stopped
+              depends_on: [kafka]
+              ports:
+                - "8084:8080"
+              environment:
+                - KAFKA_CLUSTERS_0_NAME=SOC-KAFKA
+                - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:29092
+
+            kafka-exporter:
+              image: {{ kafka_exporter_image }}
+              container_name: kafka-exporter
+              restart: unless-stopped
+              depends_on: [kafka]
+              command:
+                - --kafka.server=kafka:29092
+              ports:
+                - "9308:9308"
+
+            spark-master:
+              image: {{ spark_master_image }}
+              container_name: spark-master
+              restart: unless-stopped
+              ports:
+                - "8080:8080"
+                - "7077:7077"
+              environment:
+                - SPARK_MODE=master
+
+            spark-worker-1:
+              image: {{ spark_master_image }}
+              container_name: spark-worker-1
+              restart: unless-stopped
+              depends_on: [spark-master]
+              ports:
+                - "8082:8081"
+              environment:
+                - SPARK_MODE=worker
+                - SPARK_MASTER_URL=spark://spark-master:7077
+
+            prometheus:
+              image: {{ prometheus_image }}
+              container_name: prometheus
+              restart: unless-stopped
+              ports:
+                - "9090:9090"
+              volumes:
+                - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+              depends_on: [kafka-exporter]
+
+            grafana:
+              image: {{ grafana_image }}
+              container_name: grafana
+              restart: unless-stopped
+              ports:
+                - "3000:3000"
+              environment:
+                - GF_SECURITY_ADMIN_USER={{ grafana_admin_user | default('admin') }}
+                - GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password | default('admin') }}
+              volumes:
+                - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+                - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+              depends_on: [prometheus]
+
+          networks:
+            default:
+              name: streaming_default
+
+    - name: "Up streaming"
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ streaming_compose }} up -d"
+      args:
+        chdir: "{{ streaming_base }}"
