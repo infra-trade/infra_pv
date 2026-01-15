@@ -1,16 +1,10 @@
 ---
 # ==============================================================================
 # 36_trading_ibkr_airflow_kafka_spark.yml
-# Infra PV - Trading Algorítmico: IBKR (master) + Airflow (NOC) + (stubs Kafka/Spark)
-# - IBKR en pv-infra-master (VNC 5900)
-# - Airflow en pv-infra-noc (Postgres + LocalExecutor + webserver + scheduler + cli)
-#   * llaves persistentes (FERNET + WEBSERVER SECRET) en /opt/stacks/noc/airflow/env
-#   * DB init + migrate forzado y restart webserver/scheduler para evitar loop "db init"
-#   * salud por HTTP /health (no por docker healthcheck)
-#
-# Requiere:
-# - Docker y compose (v2 o v1) instalados (playbook 21)
-# - group_vars/trading_secrets.yml con credenciales (opcional; defaults incluidos)
+# IBKR en pv-infra-master + Airflow en pv-infra-noc
+# FIXES:
+# - Evita recursión de vars (ibkr_username etc.)
+# - DB init + migrate + restart + /health HTTP para Airflow
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -26,20 +20,20 @@
     ibkr_compose_file: "{{ ibkr_stack_dir }}/docker-compose.yml"
     ibkr_env_file: "{{ ibkr_stack_dir }}/env/ibkr.env"
 
-    # Imagen IBKR (puedes ajustar si ya definiste otra)
+    # Imagen IBKR (ajusta si usas otra)
     ibkr_image: "{{ ibkr_image | default('gnzsnz/ib-gateway:stable') }}"
     ibkr_container_name: "ibkr-gateway"
 
     # Puertos
     ibkr_vnc_port: "{{ ibkr_vnc_port | default('5900') }}"
-    ibkr_gateway_port: "{{ ibkr_gateway_port | default('4002') }}"   # paper/default en muchas imágenes
-    ibkr_api_port: "{{ ibkr_api_port | default('4001') }}"          # opcional
+    ibkr_gateway_port: "{{ ibkr_gateway_port | default('4002') }}"
+    ibkr_api_port: "{{ ibkr_api_port | default('4001') }}"
 
-    # Credenciales / variables (idealmente en trading_secrets.yml)
-    ibkr_username: "{{ ibkr_username | default('IBKR_USER') }}"
-    ibkr_password: "{{ ibkr_password | default('IBKR_PASS') }}"
-    ibkr_vnc_password: "{{ ibkr_vnc_password | default('ChangeMe_VNC_123!') }}"
-    ibkr_trading_mode: "{{ ibkr_trading_mode | default('paper') }}" # paper/live depende imagen
+    # Credenciales (si no existen en group_vars/trading_secrets.yml, usa defaults)
+    ibkr_username_value: "{{ ibkr_username | default('IBKR_USER') }}"
+    ibkr_password_value: "{{ ibkr_password | default('IBKR_PASS') }}"
+    ibkr_vnc_password_value: "{{ ibkr_vnc_password | default('ChangeMe_VNC_123!') }}"
+    ibkr_trading_mode_value: "{{ ibkr_trading_mode | default('paper') }}"
 
   tasks:
     - name: Detectar comando compose (docker compose v2 o docker-compose v1)
@@ -94,10 +88,10 @@
         group: root
         mode: "0600"
         content: |
-          IBKR_USERNAME={{ ibkr_username }}
-          IBKR_PASSWORD={{ ibkr_password }}
-          IBKR_TRADING_MODE={{ ibkr_trading_mode }}
-          VNC_PASSWORD={{ ibkr_vnc_password }}
+          IBKR_USERNAME={{ ibkr_username_value }}
+          IBKR_PASSWORD={{ ibkr_password_value }}
+          IBKR_TRADING_MODE={{ ibkr_trading_mode_value }}
+          VNC_PASSWORD={{ ibkr_vnc_password_value }}
 
     - name: Crear docker-compose para IBKR (habilita VNC 5900)
       ansible.builtin.copy:
@@ -160,26 +154,21 @@
 
     airflow_port: "{{ airflow_port | default('8081') }}"
 
-    # credenciales DB (puedes mover a trading_secrets.yml)
-    airflow_db_user: "{{ airflow_db_user | default('airflow') }}"
-    airflow_db_password: "{{ airflow_db_password | default('airflow') }}"
-    airflow_db_name: "{{ airflow_db_name | default('airflow') }}"
+    airflow_db_user_value: "{{ airflow_db_user | default('airflow') }}"
+    airflow_db_password_value: "{{ airflow_db_password | default('airflow') }}"
+    airflow_db_name_value: "{{ airflow_db_name | default('airflow') }}"
 
-    # admin web
-    airflow_admin_username: "{{ airflow_admin_username | default('admin') }}"
-    airflow_admin_password: "{{ airflow_admin_password | default('admin') }}"
-    airflow_admin_email: "{{ airflow_admin_email | default('admin@example.com') }}"
+    airflow_admin_username_value: "{{ airflow_admin_username | default('admin') }}"
+    airflow_admin_password_value: "{{ airflow_admin_password | default('admin') }}"
+    airflow_admin_email_value: "{{ airflow_admin_email | default('admin@example.com') }}"
 
-    # performance / estabilidad
     airflow_webserver_workers: "{{ airflow_webserver_workers | default('1') }}"
 
-    # paths
     airflow_dags_prod: "{{ airflow_stack_dir }}/dags/prod"
     airflow_dags_backtest: "{{ airflow_stack_dir }}/dags/backtest"
     airflow_logs_dir: "{{ airflow_stack_dir }}/logs"
     airflow_plugins_dir: "{{ airflow_stack_dir }}/plugins"
 
-    # archivos de llaves persistentes
     airflow_webserver_secret_key_file: "{{ airflow_env_dir }}/airflow_webserver_secret_key.txt"
     airflow_fernet_key_file: "{{ airflow_env_dir }}/airflow_fernet_key.txt"
 
@@ -275,7 +264,6 @@
         set -e
         python3 - <<'PY'
         import base64, os
-        # 32 bytes => Fernet key base64 urlsafe (44 chars típicamente)
         print(base64.urlsafe_b64encode(os.urandom(32)).decode())
         PY
       args:
@@ -321,13 +309,13 @@
               image: {{ airflow_postgres_image }}
               container_name: airflow-postgres
               environment:
-                POSTGRES_USER: {{ airflow_db_user }}
-                POSTGRES_PASSWORD: {{ airflow_db_password }}
-                POSTGRES_DB: {{ airflow_db_name }}
+                POSTGRES_USER: {{ airflow_db_user_value }}
+                POSTGRES_PASSWORD: {{ airflow_db_password_value }}
+                POSTGRES_DB: {{ airflow_db_name_value }}
               volumes:
                 - {{ airflow_stack_dir }}/pgdata:/var/lib/postgresql/data
               healthcheck:
-                test: ["CMD-SHELL", "pg_isready -U {{ airflow_db_user }} -d {{ airflow_db_name }}"]
+                test: ["CMD-SHELL", "pg_isready -U {{ airflow_db_user_value }} -d {{ airflow_db_name_value }}"]
                 interval: 5s
                 timeout: 5s
                 retries: 30
@@ -341,7 +329,7 @@
                   condition: service_healthy
               environment:
                 AIRFLOW__CORE__EXECUTOR: LocalExecutor
-                AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://{{ airflow_db_user }}:{{ airflow_db_password }}@postgres:5432/{{ airflow_db_name }}
+                AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://{{ airflow_db_user_value }}:{{ airflow_db_password_value }}@postgres:5432/{{ airflow_db_name_value }}
                 AIRFLOW__CORE__FERNET_KEY: "{{ airflow_fernet_key }}"
                 AIRFLOW__WEBSERVER__SECRET_KEY: "{{ airflow_webserver_secret_key }}"
                 AIRFLOW__WEBSERVER__WORKERS: "{{ airflow_webserver_workers }}"
@@ -349,7 +337,6 @@
                 AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
                 AIRFLOW__WEBSERVER__RBAC: "True"
                 AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
-                AIRFLOW__CORE__ENABLE_XCOM_PICKLING: "False"
               volumes:
                 - {{ airflow_dags_prod }}:/opt/airflow/dags/prod
                 - {{ airflow_dags_backtest }}:/opt/airflow/dags/backtest
@@ -370,7 +357,7 @@
                   condition: service_healthy
               environment:
                 AIRFLOW__CORE__EXECUTOR: LocalExecutor
-                AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://{{ airflow_db_user }}:{{ airflow_db_password }}@postgres:5432/{{ airflow_db_name }}
+                AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://{{ airflow_db_user_value }}:{{ airflow_db_password_value }}@postgres:5432/{{ airflow_db_name_value }}
                 AIRFLOW__CORE__FERNET_KEY: "{{ airflow_fernet_key }}"
                 AIRFLOW__WEBSERVER__SECRET_KEY: "{{ airflow_webserver_secret_key }}"
                 AIRFLOW__CORE__LOAD_EXAMPLES: "False"
@@ -392,7 +379,7 @@
                   condition: service_healthy
               environment:
                 AIRFLOW__CORE__EXECUTOR: LocalExecutor
-                AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://{{ airflow_db_user }}:{{ airflow_db_password }}@postgres:5432/{{ airflow_db_name }}
+                AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://{{ airflow_db_user_value }}:{{ airflow_db_password_value }}@postgres:5432/{{ airflow_db_name_value }}
                 AIRFLOW__CORE__FERNET_KEY: "{{ airflow_fernet_key }}"
                 AIRFLOW__WEBSERVER__SECRET_KEY: "{{ airflow_webserver_secret_key }}"
               volumes:
@@ -403,15 +390,6 @@
               entrypoint: /bin/bash
               command: -lc "sleep infinity"
               restart: unless-stopped
-
-    - name: Eliminar contenedor legacy "airflow" si existe (evita choques)
-      ansible.builtin.shell: |
-        set +e
-        docker rm -f airflow >/dev/null 2>&1 || true
-        exit 0
-      args:
-        executable: /bin/bash
-      changed_when: false
 
     - name: Detener stack Airflow previo (si existe) y limpiar orphans
       ansible.builtin.shell: |
@@ -456,9 +434,6 @@
       until: cli_running.rc == 0
       changed_when: false
 
-    # --------------------------------------------------------------------------
-    # FIX PRINCIPAL: DB init + migrate explícito + restart webserver/scheduler
-    # --------------------------------------------------------------------------
     - name: Inicializar DB Airflow (idempotente) via airflow-cli
       ansible.builtin.command:
         cmd: docker exec airflow-cli airflow db init
@@ -488,16 +463,16 @@
       ansible.builtin.command:
         cmd: >
           docker exec airflow-cli airflow users create
-          --username {{ airflow_admin_username }}
-          --password {{ airflow_admin_password }}
+          --username {{ airflow_admin_username_value }}
+          --password {{ airflow_admin_password_value }}
           --firstname Admin
           --lastname User
           --role Admin
-          --email {{ airflow_admin_email }}
+          --email {{ airflow_admin_email_value }}
       register: admin_create
       when: >
         ('No data found' in (airflow_users_list.stdout | default('')))
-        or (airflow_admin_username not in (airflow_users_list.stdout | default('')))
+        or (airflow_admin_username_value not in (airflow_users_list.stdout | default('')))
       retries: 5
       delay: 5
       until: admin_create.rc == 0
@@ -508,8 +483,8 @@
       ansible.builtin.shell: |
         set -e
         docker exec airflow-cli airflow users set-password \
-          --username "{{ airflow_admin_username }}" \
-          --password "{{ airflow_admin_password }}"
+          --username "{{ airflow_admin_username_value }}" \
+          --password "{{ airflow_admin_password_value }}"
       args:
         executable: /bin/bash
       register: admin_set_pw
@@ -537,20 +512,17 @@
 
     - name: Mostrar URL de Airflow
       ansible.builtin.debug:
-        msg: "Airflow debería estar disponible en: http://{{ ansible_host | default(inventory_hostname) }}:{{ airflow_port }} (user={{ airflow_admin_username }})"
+        msg: "Airflow debería estar disponible en: http://{{ ansible_host | default(inventory_hostname) }}:{{ airflow_port }} (user={{ airflow_admin_username_value }})"
       changed_when: false
 
+
 # ------------------------------------------------------------------------------
-# PLAY 3 (opcional / placeholder): Kafka + Spark
-# Nota: No despliega Kafka/Spark aquí porque no indicaste aún en qué hosts
-#       ni si usas Confluent, Bitnami, o standalone. Lo dejamos como base.
+# PLAY 3 (placeholder)
 # ------------------------------------------------------------------------------
-- name: 36 - Placeholder (no-op) Kafka/Spark (pendiente definir hosts)
+- name: 36 - Placeholder Kafka/Spark (pendiente definir hosts)
   hosts: localhost
   gather_facts: false
   tasks:
     - name: Info
       ansible.builtin.debug:
-        msg: >
-          Kafka/Spark no se despliegan en este 36. Define dónde (pv-infra-soc o pv-infra-master)
-          y el stack (KRaft/Confluent) y lo integramos con Airflow (DAG -> produce a Kafka -> Spark consume).
+        msg: "Kafka/Spark no se despliegan en este 36. Dime en qué host van (master/noc/soc) y el stack elegido."
