@@ -1,9 +1,10 @@
 ---
 ########################################################################
-# 33 - IBKR en MASTER, Airflow en NOC, Kafka (KRaft) + Spark + Kafka UI + Observabilidad en SOC
+# 34 - IBKR en MASTER (con VNC), Airflow "plataforma" en NOC (Postgres + LocalExecutor + Scheduler),
+#      Kafka (KRaft) + Spark + Kafka UI + Observabilidad en SOC
 ########################################################################
 
-- name: 33 - Desplegar contenedor IBKR en nodo master
+- name: 34 - Desplegar contenedor IBKR en nodo master (con VNC)
   hosts: pv-infra-master
   become: true
 
@@ -43,7 +44,7 @@
         group: root
         mode: "0600"
 
-    - name: Crear docker-compose para IBKR
+    - name: Crear docker-compose para IBKR (habilita VNC 5900)
       ansible.builtin.copy:
         dest: "{{ ibkr_compose_file }}"
         owner: root
@@ -59,11 +60,14 @@
               restart: unless-stopped
               env_file:
                 - ./env/ibkr.env
+              # VNC (x11vnc) se habilita usando VNC_SERVER_PASSWORD en el env_file
+              # y exponiendo el puerto 5900 del contenedor hacia el host.
+              ports:
+                - "4001:4001"
+                - "5900:5900"
               volumes:
                 - ./logs:/opt/ibgateway/logs
                 - ./config:/opt/ibgateway/config
-              ports:
-                - "4001:4001"
               networks:
                 - ibkr_net
 
@@ -88,7 +92,7 @@
 
 ########################################################################
 
-- name: 33 - Desplegar Airflow para orquestación de estrategias (NOC)
+- name: 34 - Desplegar Airflow "plataforma" (Postgres + LocalExecutor + Scheduler) en NOC
   hosts: pv-infra-noc
   become: true
 
@@ -99,21 +103,29 @@
     airflow_base_dir: /opt/stacks/noc/airflow
     airflow_compose_file: "{{ airflow_base_dir }}/docker-compose.yml"
 
+    # Ajusta si quieres:
+    airflow_uid: "50000"
+
+    # Credenciales DB (recomendado meterlas en Vault -> trading_secrets.yml)
+    airflow_db_user: "{{ airflow_postgres_user | default('airflow') }}"
+    airflow_db_password: "{{ airflow_postgres_password | default('airflow') }}"
+    airflow_db_name: "{{ airflow_postgres_db | default('airflow') }}"
+
   tasks:
     - name: Crear carpeta base para stack Airflow
       ansible.builtin.file:
         path: "{{ airflow_base_dir }}"
         state: directory
-        owner: "50000"
-        group: "50000"
+        owner: "{{ airflow_uid }}"
+        group: "{{ airflow_uid }}"
         mode: "0775"
 
     - name: Crear carpetas de DAGs, logs y plugins (prod y backtest)
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
-        owner: "50000"
-        group: "50000"
+        owner: "{{ airflow_uid }}"
+        group: "{{ airflow_uid }}"
         mode: "0775"
       loop:
         - "{{ airflow_base_dir }}/dags/prod"
@@ -121,37 +133,81 @@
         - "{{ airflow_base_dir }}/logs"
         - "{{ airflow_base_dir }}/plugins"
 
-    - name: Crear docker-compose de Airflow (simple / SequentialExecutor)
+    - name: Crear docker-compose de Airflow (Postgres + LocalExecutor + webserver + scheduler)
       ansible.builtin.copy:
         dest: "{{ airflow_compose_file }}"
-        owner: "50000"
-        group: "50000"
+        owner: "{{ airflow_uid }}"
+        group: "{{ airflow_uid }}"
         mode: "0644"
         content: |
           version: "3.8"
 
+          x-airflow-common: &airflow-common
+            image: apache/airflow:2.10.2
+            restart: unless-stopped
+            environment:
+              - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+              - AIRFLOW__CORE__LOAD_EXAMPLES=False
+              - AIRFLOW__WEBSERVER__RBAC=True
+              - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
+              - AIRFLOW_UID={{ airflow_uid }}
+              - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://{{ airflow_db_user }}:{{ airflow_db_password }}@postgres:5432/{{ airflow_db_name }}
+            volumes:
+              - ./dags/prod:/opt/airflow/dags/prod
+              - ./dags/backtest:/opt/airflow/dags/backtest
+              - ./logs:/opt/airflow/logs
+              - ./plugins:/opt/airflow/plugins
+            depends_on:
+              - postgres
+
           services:
-            airflow:
-              image: apache/airflow:2.10.2
-              container_name: airflow
+            postgres:
+              image: postgres:15
+              container_name: airflow-postgres
               restart: unless-stopped
               environment:
-                - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
-                - AIRFLOW__CORE__LOAD_EXAMPLES=False
-                - AIRFLOW__WEBSERVER__RBAC=True
-                - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
-                - AIRFLOW_UID=50000
+                - POSTGRES_USER={{ airflow_db_user }}
+                - POSTGRES_PASSWORD={{ airflow_db_password }}
+                - POSTGRES_DB={{ airflow_db_name }}
               volumes:
-                - ./dags/prod:/opt/airflow/dags/prod
-                - ./dags/backtest:/opt/airflow/dags/backtest
-                - ./logs:/opt/airflow/logs
-                - ./plugins:/opt/airflow/plugins
+                - postgres_data:/var/lib/postgresql/data
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U {{ airflow_db_user }} -d {{ airflow_db_name }}"]
+                interval: 10s
+                timeout: 5s
+                retries: 10
+
+            airflow-init:
+              <<: *airflow-common
+              container_name: airflow-init
+              entrypoint: /bin/bash
+              command: >
+                -c "
+                airflow db migrate &&
+                airflow users create
+                  --username {{ airflow_admin_username | default('admin') }}
+                  --password {{ airflow_admin_password | default('admin') }}
+                  --firstname Admin
+                  --lastname User
+                  --role Admin
+                  --email {{ airflow_admin_email | default('admin@example.com') }} || true
+                "
+              restart: "no"
+
+            airflow-webserver:
+              <<: *airflow-common
+              container_name: airflow-webserver
               ports:
                 - "8081:8080"
-              command: >
-                bash -c "
-                airflow webserver
-                "
+              command: webserver
+
+            airflow-scheduler:
+              <<: *airflow-common
+              container_name: airflow-scheduler
+              command: scheduler
+
+          volumes:
+            postgres_data:
 
           networks:
             default:
@@ -172,50 +228,32 @@
       args:
         chdir: "{{ airflow_base_dir }}"
 
-    - name: Esperar a que el contenedor Airflow esté corriendo
-      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' airflow
-      register: airflow_running
-      retries: 30
-      delay: 2
-      until: airflow_running.stdout.strip() == "true"
-      changed_when: false
-
-    - name: Esperar a que Airflow responda dentro del contenedor
-      ansible.builtin.command: docker exec airflow airflow version
-      register: airflow_version_cmd
+    - name: Esperar a Postgres listo
+      ansible.builtin.command:
+        cmd: docker inspect -f '{{ "{{" }}.State.Health.Status{{ "}}" }}' airflow-postgres
+      register: pg_health
       retries: 30
       delay: 3
-      until: airflow_version_cmd.rc == 0
+      until: pg_health.stdout.strip() == "healthy"
       changed_when: false
 
-    - name: Inicializar DB de Airflow (airflow db init)
-      ansible.builtin.command: docker exec airflow airflow db init
-      register: airflow_db_init
-      retries: 10
-      delay: 6
-      until: airflow_db_init.rc == 0
-      changed_when: true
+    - name: Ejecutar airflow-init (migraciones + usuario admin)
+      ansible.builtin.command:
+        cmd: docker-compose -f "{{ airflow_compose_file }}" up airflow-init
+      args:
+        chdir: "{{ airflow_base_dir }}"
+      register: airflow_init_run
+      changed_when: "'Creating' in airflow_init_run.stdout or 'Recreating' in airflow_init_run.stdout or airflow_init_run.rc == 0"
 
-    - name: Crear/actualizar usuario admin de Airflow desde secrets (idempotente)
-      ansible.builtin.command: >
-        docker exec airflow airflow users create
-        --username {{ airflow_admin_username | default('admin') }}
-        --password {{ airflow_admin_password | default('admin') }}
-        --firstname Admin
-        --lastname User
-        --role Admin
-        --email {{ airflow_admin_email | default('admin@example.com') }}
-      register: airflow_user_create
-      failed_when: >
-        airflow_user_create.rc != 0
-        and "already exists" not in airflow_user_create.stderr
-      changed_when: >
-        airflow_user_create.rc == 0
-        and "already exists" not in airflow_user_create.stderr
+    - name: Reiniciar webserver y scheduler (por si init cambió metadata)
+      ansible.builtin.command:
+        cmd: docker-compose -f "{{ airflow_compose_file }}" restart airflow-webserver airflow-scheduler
+      args:
+        chdir: "{{ airflow_base_dir }}"
 
 ########################################################################
 
-- name: 33 - Desplegar Kafka (KRaft) + Spark + Kafka UI + Observabilidad (SOC)
+- name: 34 - Desplegar Kafka (KRaft) + Spark + Kafka UI + Observabilidad (SOC)
   hosts: pv-infra-soc
   become: true
 
