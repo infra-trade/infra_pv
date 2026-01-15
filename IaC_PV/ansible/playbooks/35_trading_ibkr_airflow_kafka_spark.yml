@@ -92,7 +92,7 @@
         chdir: "{{ ibkr_stack_base }}"
 
 ###############################################################################
-# 35 - Airflow plataforma en NOC (Postgres + LocalExecutor + Scheduler + Keys)
+# 35 - Airflow plataforma en NOC
 ###############################################################################
 - name: 35 - Desplegar Airflow plataforma en NOC (Postgres + LocalExecutor + Scheduler + Keys + Admin asegurado)
   hosts: pv-infra-noc
@@ -111,14 +111,14 @@
     airflow_db_password: "{{ airflow_postgres_password | default('airflow') }}"
     airflow_db_name: "{{ airflow_postgres_db | default('airflow') }}"
 
-    # Persistencia de keys (NO cambian entre redeploys)
+    # Persistencia de keys
     airflow_env_dir: "{{ airflow_base_dir }}/env"
     airflow_secret_key_file: "{{ airflow_env_dir }}/airflow_webserver_secret_key.txt"
     airflow_fernet_key_file: "{{ airflow_env_dir }}/airflow_fernet_key.txt"
 
-    # Ajuste para evitar OOM en entornos pequeños
-    airflow_webserver_workers: "{{ airflow_webserver_workers | default('1') }}"
-    airflow_shm_size: "{{ airflow_shm_size | default('512m') }}"
+    # Anti-OOM (valores fijos por defecto; si luego quieres tunearlos, cambia aquí)
+    airflow_webserver_workers_value: "1"
+    airflow_shm_size_value: "512m"
 
   tasks:
     - name: Crear carpeta base para stack Airflow
@@ -226,12 +226,12 @@
               - AIRFLOW_UID={{ airflow_uid }}
               - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://{{ airflow_db_user }}:{{ airflow_db_password }}@postgres:5432/{{ airflow_db_name }}
 
-              # Keys persistentes (NO cambian entre redeploys)
+              # Keys persistentes
               - AIRFLOW__WEBSERVER__SECRET_KEY={{ airflow_webserver_secret_key }}
               - AIRFLOW__CORE__FERNET_KEY={{ airflow_fernet_key }}
 
-              # Reduce consumo / evita OOM en VMs pequeñas
-              - AIRFLOW__WEBSERVER__WORKERS={{ airflow_webserver_workers }}
+              # Anti-OOM
+              - AIRFLOW__WEBSERVER__WORKERS={{ airflow_webserver_workers_value }}
 
             volumes:
               - ./dags/prod:/opt/airflow/dags/prod
@@ -263,13 +263,13 @@
               container_name: airflow-webserver
               ports:
                 - "8081:8080"
-              shm_size: "{{ airflow_shm_size }}"
+              shm_size: "{{ airflow_shm_size_value }}"
               command: webserver
 
             airflow-scheduler:
               <<: *airflow-common
               container_name: airflow-scheduler
-              shm_size: "{{ airflow_shm_size }}"
+              shm_size: "{{ airflow_shm_size_value }}"
               command: scheduler
 
           volumes:
@@ -378,7 +378,7 @@
       failed_when: false
       changed_when: airflow_reset_pwd.rc == 0
 
-    - name: Reiniciar webserver y scheduler (asegura scheduler arriba)
+    - name: Reiniciar webserver y scheduler
       ansible.builtin.command:
         cmd: docker-compose -f "{{ airflow_compose_file }}" restart airflow-webserver airflow-scheduler
       args:
