@@ -1,0 +1,152 @@
+---
+- name: Crear VMs de infraestructura en vCenter desde PV-INFRA-IaC (Tier B MAX)
+  hosts: localhost
+  gather_facts: false
+  connection: local
+
+  vars_files:
+    - "../inventories/vcenter/group_vars/all/vcenter.yml"
+
+  vars:
+    infra_ssh_user: "pvinfra"
+
+    # Tier B (MAX) por rol:
+    infra_vms:
+      - name: pv-infra-master
+        ip: "192.168.5.85"
+        cpu: 4
+        memory_mb: 16384
+        disk_gb: 160
+
+      - name: pv-infra-noc
+        ip: "192.168.5.86"
+        cpu: 8
+        memory_mb: 32768
+        disk_gb: 500
+
+      - name: pv-infra-soc
+        ip: "192.168.5.87"
+        cpu: 16
+        memory_mb: 65536
+        disk_gb: 2000
+
+    vm_source_name: "PV-INFRA-IaC"
+    vm_folder: "PV_IaC"
+    vm_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
+    vm_network: "VLAN-5"
+    vm_netmask: "255.255.255.0"
+    vm_gateway: "192.168.5.252"
+    vm_dns_servers:
+      - "192.168.10.2"
+      - "8.8.8.8"
+
+    # Si tu template soporta customization y VMware Tools:
+    wait_for_ip_address: false
+
+  tasks:
+    - name: Crear/actualizar VMs de infraestructura (clonar template), aplicar HW y ENCENDERLAS
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+
+        datacenter: "{{ vcenter_datacenter }}"
+        cluster: "{{ vcenter_cluster }}"
+        folder: "{{ vm_folder }}"
+
+        name: "{{ item.name }}"
+        state: poweredon
+        template: "{{ vm_source_name }}"
+        datastore: "{{ vm_datastore }}"
+
+        hardware:
+          num_cpus: "{{ item.cpu }}"
+          memory_mb: "{{ item.memory_mb }}"
+          scsi: paravirtual
+
+        # Intento de ajustar el disco principal al tamaño objetivo
+        # (si tu template tiene un solo disco y permite expansión).
+        disk:
+          - size_gb: "{{ item.disk_gb }}"
+            type: thin
+            datastore: "{{ vm_datastore }}"
+
+        networks:
+          - name: "{{ vm_network }}"
+            type: static
+            ip: "{{ item.ip }}"
+            netmask: "{{ vm_netmask }}"
+            gateway: "{{ vm_gateway }}"
+            dns_servers: "{{ vm_dns_servers }}"
+
+        wait_for_ip_address: "{{ wait_for_ip_address }}"
+      loop: "{{ infra_vms }}"
+      delegate_to: localhost
+
+    - name: Registrar hosts clonados en inventario en memoria
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups:
+          - pv_infra_temp
+        ansible_host: "{{ item.ip }}"
+        ansible_user: "{{ infra_ssh_user }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      loop: "{{ infra_vms }}"
+
+    - name: Mostrar resumen de VMs clonadas
+      ansible.builtin.debug:
+        msg: >-
+          VM {{ item.name }} clonada desde {{ vm_source_name }}
+          en carpeta {{ vm_folder }}, datastore {{ vm_datastore }},
+          IP {{ item.ip }} en {{ vm_network }}.
+          HW => CPU={{ item.cpu }} | MEM={{ item.memory_mb }}MB | DISK={{ item.disk_gb }}GB
+      loop: "{{ infra_vms }}"
+
+# ======================================================================
+# Segundo play: instalar llave SSH y sudo sin contraseña en las VMs
+# ======================================================================
+- name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs clonadas
+  hosts: pv_infra_temp
+  gather_facts: false
+  become: true
+  serial: 1
+
+  vars:
+    ssh_public_key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_ed25519.pub') }}"
+
+  tasks:
+    - name: Esperar a que SSH (puerto 22) esté disponible
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host | default(inventory_hostname) }}"
+        port: 22
+        delay: 15
+        timeout: 900
+        state: started
+      delegate_to: localhost
+
+    - name: Dar tiempo extra al sistema para terminar el arranque
+      ansible.builtin.pause:
+        seconds: 30
+
+    - name: Autorizar llave pública del nodo Ansible (crea .ssh automáticamente)
+      ansible.posix.authorized_key:
+        user: "{{ ansible_user }}"
+        state: present
+        key: "{{ ssh_public_key }}"
+        manage_dir: true
+
+    - name: Asegurar que el usuario está en el grupo sudo
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: "sudo"
+        append: true
+
+    - name: Permitir sudo sin contraseña para el usuario
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/99-{{ ansible_user }}-nopasswd"
+        content: "{{ ansible_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: "visudo -cf %s"
