@@ -20,7 +20,7 @@
     ibkr_env_file: "{{ ibkr_stack_dir }}/env/ibkr.env"
 
     # Imagen IBKR (ajusta si usas otra)
-    ibkr_image: "{{ ibkr_image | default('gnzsnz/ib-gateway:stable') }}"
+    ibkr_image: "gnzsnz/ib-gateway:stable"
     ibkr_container_name: "ibkr-gateway"
 
     # Puertos
