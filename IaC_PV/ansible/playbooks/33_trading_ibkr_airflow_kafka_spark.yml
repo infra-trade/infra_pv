@@ -1,10 +1,10 @@
 ---
 ########################################################################
-# 34 - IBKR en MASTER (con VNC), Airflow "plataforma" en NOC (Postgres + LocalExecutor + Scheduler),
+# 35 - IBKR en MASTER (VNC), Airflow "plataforma" en NOC (Postgres + LocalExecutor + Scheduler + keys persistentes),
 #      Kafka (KRaft) + Spark + Kafka UI + Observabilidad en SOC
 ########################################################################
 
-- name: 34 - Desplegar contenedor IBKR en nodo master (con VNC)
+- name: 35 - Desplegar contenedor IBKR en nodo master (con VNC)
   hosts: pv-infra-master
   become: true
 
@@ -60,8 +60,6 @@
               restart: unless-stopped
               env_file:
                 - ./env/ibkr.env
-              # VNC (x11vnc) se habilita usando VNC_SERVER_PASSWORD en el env_file
-              # y exponiendo el puerto 5900 del contenedor hacia el host.
               ports:
                 - "4001:4001"
                 - "5900:5900"
@@ -92,7 +90,7 @@
 
 ########################################################################
 
-- name: 34 - Desplegar Airflow "plataforma" (Postgres + LocalExecutor + Scheduler) en NOC
+- name: 35 - Desplegar Airflow "plataforma" (Postgres + LocalExecutor + Scheduler + Keys) en NOC
   hosts: pv-infra-noc
   become: true
 
@@ -102,14 +100,17 @@
   vars:
     airflow_base_dir: /opt/stacks/noc/airflow
     airflow_compose_file: "{{ airflow_base_dir }}/docker-compose.yml"
-
-    # Ajusta si quieres:
     airflow_uid: "50000"
 
-    # Credenciales DB (recomendado meterlas en Vault -> trading_secrets.yml)
+    # DB creds (ideal: en Vault dentro de trading_secrets.yml)
     airflow_db_user: "{{ airflow_postgres_user | default('airflow') }}"
     airflow_db_password: "{{ airflow_postgres_password | default('airflow') }}"
     airflow_db_name: "{{ airflow_postgres_db | default('airflow') }}"
+
+    # Dónde persistimos keys (para que NO cambien entre redeploys)
+    airflow_env_dir: "{{ airflow_base_dir }}/env"
+    airflow_secret_key_file: "{{ airflow_env_dir }}/airflow_webserver_secret_key.txt"
+    airflow_fernet_key_file: "{{ airflow_env_dir }}/airflow_fernet_key.txt"
 
   tasks:
     - name: Crear carpeta base para stack Airflow
@@ -119,6 +120,14 @@
         owner: "{{ airflow_uid }}"
         group: "{{ airflow_uid }}"
         mode: "0775"
+
+    - name: Crear carpeta env para llaves persistentes
+      ansible.builtin.file:
+        path: "{{ airflow_env_dir }}"
+        state: directory
+        owner: "{{ airflow_uid }}"
+        group: "{{ airflow_uid }}"
+        mode: "0770"
 
     - name: Crear carpetas de DAGs, logs y plugins (prod y backtest)
       ansible.builtin.file:
@@ -133,7 +142,65 @@
         - "{{ airflow_base_dir }}/logs"
         - "{{ airflow_base_dir }}/plugins"
 
-    - name: Crear docker-compose de Airflow (Postgres + LocalExecutor + webserver + scheduler)
+    ####################################################################
+    # Generación idempotente de AIRFLOW__WEBSERVER__SECRET_KEY y FERNET_KEY
+    ####################################################################
+
+    - name: Verificar si existe AIRFLOW__WEBSERVER__SECRET_KEY persistente
+      ansible.builtin.stat:
+        path: "{{ airflow_secret_key_file }}"
+      register: secret_key_stat
+
+    - name: Generar AIRFLOW__WEBSERVER__SECRET_KEY (solo si no existe)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        openssl rand -hex 32 > "{{ airflow_secret_key_file }}"
+        chown {{ airflow_uid }}:{{ airflow_uid }} "{{ airflow_secret_key_file }}"
+        chmod 0600 "{{ airflow_secret_key_file }}"
+      args:
+        executable: /bin/bash
+      when: not secret_key_stat.stat.exists
+
+    - name: Verificar si existe AIRFLOW__CORE__FERNET_KEY persistente
+      ansible.builtin.stat:
+        path: "{{ airflow_fernet_key_file }}"
+      register: fernet_key_stat
+
+    - name: Generar AIRFLOW__CORE__FERNET_KEY urlsafe (solo si no existe)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        python3 - <<'PY' > "{{ airflow_fernet_key_file }}"
+        import os, base64
+        print(base64.urlsafe_b64encode(os.urandom(32)).decode())
+        PY
+        chown {{ airflow_uid }}:{{ airflow_uid }} "{{ airflow_fernet_key_file }}"
+        chmod 0600 "{{ airflow_fernet_key_file }}"
+      args:
+        executable: /bin/bash
+      when: not fernet_key_stat.stat.exists
+
+    - name: Leer AIRFLOW__WEBSERVER__SECRET_KEY desde archivo (remote)
+      ansible.builtin.slurp:
+        src: "{{ airflow_secret_key_file }}"
+      register: secret_key_slurp
+
+    - name: Leer AIRFLOW__CORE__FERNET_KEY desde archivo (remote)
+      ansible.builtin.slurp:
+        src: "{{ airflow_fernet_key_file }}"
+      register: fernet_key_slurp
+
+    - name: Set facts con llaves para docker-compose
+      ansible.builtin.set_fact:
+        airflow_webserver_secret_key: "{{ (secret_key_slurp.content | b64decode).strip() }}"
+        airflow_fernet_key: "{{ (fernet_key_slurp.content | b64decode).strip() }}"
+
+    ####################################################################
+    # Compose Airflow Plataforma
+    ####################################################################
+
+    - name: Crear docker-compose de Airflow (Postgres + LocalExecutor + webserver + scheduler + keys)
       ansible.builtin.copy:
         dest: "{{ airflow_compose_file }}"
         owner: "{{ airflow_uid }}"
@@ -152,6 +219,11 @@
               - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
               - AIRFLOW_UID={{ airflow_uid }}
               - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://{{ airflow_db_user }}:{{ airflow_db_password }}@postgres:5432/{{ airflow_db_name }}
+
+              # Keys persistentes (NO cambian entre redeploys)
+              - AIRFLOW__WEBSERVER__SECRET_KEY={{ airflow_webserver_secret_key }}
+              - AIRFLOW__CORE__FERNET_KEY={{ airflow_fernet_key }}
+
             volumes:
               - ./dags/prod:/opt/airflow/dags/prod
               - ./dags/backtest:/opt/airflow/dags/backtest
@@ -213,9 +285,15 @@
             default:
               name: airflow_noc_net
 
-    - name: Detener stack Airflow previo (si existe)
+    - name: Eliminar contenedor legacy "airflow" si existe (evita choque de puerto/red)
       ansible.builtin.command:
-        cmd: docker-compose -f "{{ airflow_compose_file }}" down
+        cmd: docker rm -f airflow
+      failed_when: false
+      changed_when: false
+
+    - name: Detener stack Airflow previo (si existe) + limpiar orphans
+      ansible.builtin.command:
+        cmd: docker-compose -f "{{ airflow_compose_file }}" down --remove-orphans
       args:
         chdir: "{{ airflow_base_dir }}"
       register: airflow_down_result
@@ -228,7 +306,7 @@
       args:
         chdir: "{{ airflow_base_dir }}"
 
-    - name: Esperar a Postgres listo
+    - name: Esperar a Postgres listo (healthy)
       ansible.builtin.command:
         cmd: docker inspect -f '{{ "{{" }}.State.Health.Status{{ "}}" }}' airflow-postgres
       register: pg_health
@@ -243,17 +321,28 @@
       args:
         chdir: "{{ airflow_base_dir }}"
       register: airflow_init_run
-      changed_when: "'Creating' in airflow_init_run.stdout or 'Recreating' in airflow_init_run.stdout or airflow_init_run.rc == 0"
+      failed_when: false
+      changed_when: airflow_init_run.rc == 0
 
-    - name: Reiniciar webserver y scheduler (por si init cambió metadata)
+    - name: Reiniciar webserver y scheduler (aplica cambios/keys y asegura scheduler arriba)
       ansible.builtin.command:
         cmd: docker-compose -f "{{ airflow_compose_file }}" restart airflow-webserver airflow-scheduler
       args:
         chdir: "{{ airflow_base_dir }}"
 
+    # Opcional: asegurar login si cambiaron credenciales en secrets.
+    - name: Forzar password del admin (idempotente: resetea a lo del vault)
+      ansible.builtin.command: >
+        docker exec airflow-webserver airflow users reset-password
+        --username {{ airflow_admin_username | default('admin') }}
+        --password {{ airflow_admin_password | default('admin') }}
+      register: airflow_reset_pwd
+      failed_when: false
+      changed_when: airflow_reset_pwd.rc == 0
+
 ########################################################################
 
-- name: 34 - Desplegar Kafka (KRaft) + Spark + Kafka UI + Observabilidad (SOC)
+- name: 35 - Desplegar Kafka (KRaft) + Spark + Kafka UI + Observabilidad (SOC)
   hosts: pv-infra-soc
   become: true
 
@@ -478,7 +567,7 @@
             default:
               name: streaming_default
 
-    - name: Detener stack Kafka + Spark previo (si existe)
+    - name: Detener stack Streaming previo (si existe)
       ansible.builtin.command:
         cmd: docker-compose -f "{{ streaming_compose_file }}" down
       args:
@@ -487,7 +576,7 @@
       failed_when: false
       changed_when: streaming_down_result.rc == 0
 
-    - name: Desplegar stack Kafka + Spark con UI y observabilidad
+    - name: Desplegar stack Streaming con docker-compose
       ansible.builtin.command:
         cmd: docker-compose -f "{{ streaming_compose_file }}" up -d
       args:
