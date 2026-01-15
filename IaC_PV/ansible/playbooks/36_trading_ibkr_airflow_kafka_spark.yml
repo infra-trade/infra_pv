@@ -107,7 +107,7 @@
               env_file:
                 - {{ ibkr_env_file }}
               ports:
-                - "{{ ibkr_vnc_port }}:5900"
+                - "{{ ibkr_vnc_port_ref }}:5900"
                 - "{{ ibkr_gateway_port }}:4002"
                 - "{{ ibkr_api_port }}:4001"
               volumes:
