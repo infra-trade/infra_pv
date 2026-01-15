@@ -1,5 +1,5 @@
 ---
-- name: Crear VMs de infraestructura en vCenter (Tier B MAX) - estilo original + resize seguro
+- name: "20v2 - Crear/actualizar VMs Infra en vCenter (clonar template) + power on"
   hosts: localhost
   gather_facts: false
   connection: local
@@ -10,25 +10,9 @@
   vars:
     infra_ssh_user: "pvinfra"
 
-    # Tier B (MAX)
-    infra_vms:
-      - name: pv-infra-master
-        ip: "192.168.5.85"
-        cpu: 4
-        memory_mb: 16384
-        disk_gb: 160
-
-      - name: pv-infra-noc
-        ip: "192.168.5.86"
-        cpu: 8
-        memory_mb: 32768
-        disk_gb: 500
-
-      - name: pv-infra-soc
-        ip: "192.168.5.87"
-        cpu: 16
-        memory_mb: 65536
-        disk_gb: 2000
+    # Si tu template tiene VMware Tools y customization soportado,
+    # puedes poner wait_for_ip_address=true (en redes lentas puede tardar).
+    wait_for_ip_address: false
 
     vm_source_name: "PV-INFRA-IaC"
     vm_folder: "PV_IaC"
@@ -40,55 +24,25 @@
       - "192.168.10.2"
       - "8.8.8.8"
 
+    infra_vms:
+      - name: pv-infra-master
+        ip: "192.168.5.85"
+        cpu: 3
+        memory_mb: 24576
+        disk_gb: 140
+      - name: pv-infra-noc
+        ip: "192.168.5.86"
+        cpu: 2
+        memory_mb: 16384
+        disk_gb: 140
+      - name: pv-infra-soc
+        ip: "192.168.5.87"
+        cpu: 2
+        memory_mb: 16384
+        disk_gb: 140
+
   tasks:
-    #####################################################################
-    # Paso 1: Asegurar VM apagada y aplicar HW ahí (NO hotadd)
-    # (Si no existe, clona del template, pero queda apagada)
-    #####################################################################
-    - name: "Clonar/actualizar VM y dejarla APAGADA para aplicar CPU/RAM/DISK sin HotAdd"
-      community.vmware.vmware_guest:
-        hostname: "{{ vcenter_hostname }}"
-        username: "{{ vcenter_username }}"
-        password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-
-        datacenter: "{{ vcenter_datacenter }}"
-        cluster: "{{ vcenter_cluster }}"
-        folder: "{{ vm_folder }}"
-
-        name: "{{ item.name }}"
-        template: "{{ vm_source_name }}"
-        datastore: "{{ vm_datastore }}"
-
-        # CLAVE: apagada para evitar cpuHotAdd/memHotAdd
-        state: poweredoff
-
-        hardware:
-          num_cpus: "{{ item.cpu }}"
-          memory_mb: "{{ item.memory_mb }}"
-          scsi: paravirtual
-
-        # Ojo: esto intenta ajustar el DISCO principal al size_gb.
-        # Si tu template no soporta resize aquí, lo cambiamos a "agregar 2do disco".
-        disk:
-          - size_gb: "{{ item.disk_gb }}"
-            type: thin
-            datastore: "{{ vm_datastore }}"
-
-        networks:
-          - name: "{{ vm_network }}"
-            type: static
-            ip: "{{ item.ip }}"
-            netmask: "{{ vm_netmask }}"
-            gateway: "{{ vm_gateway }}"
-            dns_servers: "{{ vm_dns_servers }}"
-      loop: "{{ infra_vms }}"
-      delegate_to: localhost
-
-    #####################################################################
-    # Paso 2: Encender (ya con HW aplicado)
-    #####################################################################
-    - name: "Encender VMs (ya con Tier B aplicado)"
+    - name: "Clonar VM + ajustar hardware + NIC estática + power on"
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -101,29 +55,51 @@
 
         name: "{{ item.name }}"
         state: poweredon
+        template: "{{ vm_source_name }}"
+        datastore: "{{ vm_datastore }}"
+
+        hardware:
+          num_cpus: "{{ item.cpu }}"
+          memory_mb: "{{ item.memory_mb }}"
+          scsi: paravirtual
+
+        # Si tu template usa 1 disco y quieres expandirlo:
+        disk:
+          - size_gb: "{{ item.disk_gb }}"
+            type: thin
+            datastore: "{{ vm_datastore }}"
+
+        networks:
+          - name: "{{ vm_network }}"
+            type: static
+            ip: "{{ item.ip }}"
+            netmask: "{{ vm_netmask }}"
+            gateway: "{{ vm_gateway }}"
+            dns_servers: "{{ vm_dns_servers }}"
+
+        wait_for_ip_address: "{{ wait_for_ip_address }}"
       loop: "{{ infra_vms }}"
       delegate_to: localhost
 
-    - name: Registrar hosts clonados en inventario en memoria
+    - name: "Registrar hosts clonados en inventario en memoria"
       ansible.builtin.add_host:
         name: "{{ item.name }}"
-        groups:
-          - pv_infra_temp
+        groups: [ "pv_infra_temp" ]
         ansible_host: "{{ item.ip }}"
         ansible_user: "{{ infra_ssh_user }}"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
       loop: "{{ infra_vms }}"
 
-    - name: Mostrar resumen de VMs
+    - name: "Resumen"
       ansible.builtin.debug:
         msg: >-
-          {{ item.name }} => IP={{ item.ip }} | CPU={{ item.cpu }} | MEM={{ item.memory_mb }}MB | DISK={{ item.disk_gb }}GB
+          VM {{ item.name }} OK | CPU={{ item.cpu }} MEM={{ item.memory_mb }}MB DISK={{ item.disk_gb }}GB
+          | IP={{ item.ip }} NET={{ vm_network }} GW={{ vm_gateway }}
       loop: "{{ infra_vms }}"
 
-# ======================================================================
-# Segundo play: instalar llave SSH y sudo sin contraseña
-# ======================================================================
-- name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs
+# ----------------------------------------------------------------------
+
+- name: "20v2 - Bootstrap SSH key + sudo nopasswd (serial) en VMs clonadas"
   hosts: pv_infra_temp
   gather_facts: false
   become: true
@@ -133,33 +109,29 @@
     ssh_public_key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_ed25519.pub') }}"
 
   tasks:
-    - name: Esperar a que SSH esté disponible
+    - name: "Esperar SSH disponible"
       ansible.builtin.wait_for:
         host: "{{ ansible_host | default(inventory_hostname) }}"
         port: 22
-        delay: 15
+        delay: 10
         timeout: 900
         state: started
       delegate_to: localhost
 
-    - name: Pausa corta
-      ansible.builtin.pause:
-        seconds: 20
-
-    - name: Autorizar llave pública del nodo Ansible
+    - name: "Autorizar llave pública (crea .ssh automáticamente)"
       ansible.posix.authorized_key:
         user: "{{ ansible_user }}"
         state: present
         key: "{{ ssh_public_key }}"
         manage_dir: true
 
-    - name: Asegurar grupo sudo
+    - name: "Asegurar grupo sudo"
       ansible.builtin.user:
         name: "{{ ansible_user }}"
         groups: "sudo"
         append: true
 
-    - name: Sudo sin contraseña
+    - name: "Sudo sin contraseña (validado)"
       ansible.builtin.copy:
         dest: "/etc/sudoers.d/99-{{ ansible_user }}-nopasswd"
         content: "{{ ansible_user }} ALL=(ALL) NOPASSWD:ALL\n"
