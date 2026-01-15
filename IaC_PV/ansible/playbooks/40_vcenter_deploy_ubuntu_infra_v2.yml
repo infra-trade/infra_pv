@@ -1,5 +1,5 @@
 ---
-- name: Crear/actualizar VMs de infraestructura en vCenter (Tier B MAX) con apagado si requiere aumento
+- name: Crear/actualizar VMs de infraestructura en vCenter (Tier B MAX) - poweroff/reconfigure/poweron
   hosts: localhost
   gather_facts: false
   connection: local
@@ -39,27 +39,26 @@
       - "192.168.10.2"
       - "8.8.8.8"
 
-    # si deseas esperar customization y tools:
-    wait_for_ip_address: false
+    # Folder con ruta completa (muy importante)
+    vm_folder_full: "/{{ vcenter_datacenter }}/vm/{{ vm_folder }}"
 
   tasks:
-    # 1) Apagar VM (para permitir aumentar CPU/RAM/DISK sin HotAdd)
-    - name: Apagar VM antes de aumentar recursos (idempotente)
-      community.vmware.vmware_guest:
+    - name: Apagar VM (forzado) para permitir aumentar CPU/RAM/DISK (si existe)
+      community.vmware.vmware_guest_powerstate:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs | default(false) }}"
         datacenter: "{{ vcenter_datacenter }}"
-        folder: "{{ vm_folder }}"
+        folder: "{{ vm_folder_full }}"
         name: "{{ item.name }}"
-        state: poweredoff
+        state: powered-off
+        force: true
       loop: "{{ infra_vms }}"
       delegate_to: localhost
       failed_when: false
 
-    # 2) Aplicar HW + red + encender
-    - name: Crear/actualizar VM (clonar si no existe) + aplicar HW/NET y encender
+    - name: Crear/actualizar VM (clonar si no existe) con HW + red (sin encender aún)
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -68,20 +67,21 @@
 
         datacenter: "{{ vcenter_datacenter }}"
         cluster: "{{ vcenter_cluster }}"
-        folder: "{{ vm_folder }}"
+        folder: "{{ vm_folder_full }}"
 
         name: "{{ item.name }}"
+        state: present
+
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
-
-        # Ojo: state poweredon para que al final quede arriba
-        state: poweredon
 
         hardware:
           num_cpus: "{{ item.cpu }}"
           memory_mb: "{{ item.memory_mb }}"
           scsi: paravirtual
 
+        # Si el template tiene 1 disco, esto intenta crecerlo.
+        # Si tu template tiene más discos o el grow no aplica, luego te doy opción "agregar 2do disco".
         disk:
           - size_gb: "{{ item.disk_gb }}"
             type: thin
@@ -94,12 +94,23 @@
             netmask: "{{ vm_netmask }}"
             gateway: "{{ vm_gateway }}"
             dns_servers: "{{ vm_dns_servers }}"
-
-        wait_for_ip_address: "{{ wait_for_ip_address }}"
       loop: "{{ infra_vms }}"
       delegate_to: localhost
 
-    - name: Registrar hosts clonados/actualizados en inventario en memoria
+    - name: Encender VM luego de aplicar recursos
+      community.vmware.vmware_guest_powerstate:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "{{ vm_folder_full }}"
+        name: "{{ item.name }}"
+        state: powered-on
+      loop: "{{ infra_vms }}"
+      delegate_to: localhost
+
+    - name: Registrar hosts en inventario en memoria
       ansible.builtin.add_host:
         name: "{{ item.name }}"
         groups: [ "pv_infra_temp" ]
@@ -108,7 +119,7 @@
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
       loop: "{{ infra_vms }}"
 
-    - name: Mostrar resumen
+    - name: Resumen
       ansible.builtin.debug:
         msg: >-
           {{ item.name }} => IP={{ item.ip }}
@@ -128,7 +139,7 @@
     ssh_public_key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_ed25519.pub') }}"
 
   tasks:
-    - name: Esperar a que SSH (puerto 22) esté disponible
+    - name: Esperar SSH
       ansible.builtin.wait_for:
         host: "{{ ansible_host | default(inventory_hostname) }}"
         port: 22
@@ -137,7 +148,7 @@
         state: started
       delegate_to: localhost
 
-    - name: Pausa corta para estabilizar arranque
+    - name: Pausa corta
       ansible.builtin.pause:
         seconds: 20
 
@@ -148,7 +159,7 @@
         key: "{{ ssh_public_key }}"
         manage_dir: true
 
-    - name: Asegurar que el usuario está en sudo
+    - name: Asegurar sudo
       ansible.builtin.user:
         name: "{{ ansible_user }}"
         groups: "sudo"
