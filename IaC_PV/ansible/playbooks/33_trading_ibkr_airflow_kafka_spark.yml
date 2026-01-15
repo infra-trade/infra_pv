@@ -331,7 +331,7 @@
         chdir: "{{ airflow_base_dir }}"
 
     # Opcional: asegurar login si cambiaron credenciales en secrets.
-    - name: Forzar password del admin (idempotente: resetea a lo del vault)
+    - name: "Forzar password del admin (idempotente: resetea a lo del vault)"
       ansible.builtin.command: >
         docker exec airflow-webserver airflow users reset-password
         --username {{ airflow_admin_username | default('admin') }}
