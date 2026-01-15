@@ -1,10 +1,9 @@
 ---
 # ==============================================================================
 # 36_trading_ibkr_airflow_kafka_spark.yml
-# IBKR en pv-infra-master + Airflow en pv-infra-noc
-# FIXES:
-# - Evita recursión de vars (ibkr_username etc.)
-# - DB init + migrate + restart + /health HTTP para Airflow
+# FIX PRINCIPAL:
+# - Evitar variables recursivas (NO usar ibkr_username/ibkr_password/etc)
+# - Usar ibkr_user_secret / ibkr_pass_secret / ibkr_vnc_pass_secret
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -29,11 +28,11 @@
     ibkr_gateway_port: "{{ ibkr_gateway_port | default('4002') }}"
     ibkr_api_port: "{{ ibkr_api_port | default('4001') }}"
 
-    # Credenciales (si no existen en group_vars/trading_secrets.yml, usa defaults)
-    ibkr_username_value: "{{ ibkr_username | default('IBKR_USER') }}"
-    ibkr_password_value: "{{ ibkr_password | default('IBKR_PASS') }}"
-    ibkr_vnc_password_value: "{{ ibkr_vnc_password | default('ChangeMe_VNC_123!') }}"
-    ibkr_trading_mode_value: "{{ ibkr_trading_mode | default('paper') }}"
+    # >>> FIX: usar variables NUEVAS para evitar loops del inventario <<<
+    ibkr_user_value: "{{ ibkr_user_secret | default('IBKR_USER') }}"
+    ibkr_pass_value: "{{ ibkr_pass_secret | default('IBKR_PASS') }}"
+    ibkr_vnc_pass_value: "{{ ibkr_vnc_pass_secret | default('ChangeMe_VNC_123!') }}"
+    ibkr_mode_value: "{{ ibkr_trading_mode_secret | default('paper') }}"
 
   tasks:
     - name: Detectar comando compose (docker compose v2 o docker-compose v1)
@@ -88,10 +87,10 @@
         group: root
         mode: "0600"
         content: |
-          IBKR_USERNAME={{ ibkr_username_value }}
-          IBKR_PASSWORD={{ ibkr_password_value }}
-          IBKR_TRADING_MODE={{ ibkr_trading_mode_value }}
-          VNC_PASSWORD={{ ibkr_vnc_password_value }}
+          IBKR_USERNAME={{ ibkr_user_value }}
+          IBKR_PASSWORD={{ ibkr_pass_value }}
+          IBKR_TRADING_MODE={{ ibkr_mode_value }}
+          VNC_PASSWORD={{ ibkr_vnc_pass_value }}
 
     - name: Crear docker-compose para IBKR (habilita VNC 5900)
       ansible.builtin.copy:
@@ -297,7 +296,7 @@
         airflow_fernet_key: "{{ (slurp_fernet.content | b64decode).strip() }}"
       changed_when: false
 
-    - name: Crear docker-compose de Airflow (Postgres + LocalExecutor + webserver + scheduler + cli + keys)
+    - name: Crear docker-compose de Airflow (Postgres + LocalExecutor + webserver + scheduler + cli)
       ansible.builtin.copy:
         dest: "{{ airflow_compose_file }}"
         owner: root
@@ -422,7 +421,7 @@
       until: pg_health.rc == 0
       changed_when: false
 
-    - name: Esperar que airflow-cli esté running (para comandos administrativos)
+    - name: Esperar que airflow-cli esté running
       ansible.builtin.shell: |
         set -e
         docker inspect airflow-cli --format '{{"{{"}}.State.Status{{"}}"}}' | grep -q running
@@ -434,7 +433,7 @@
       until: cli_running.rc == 0
       changed_when: false
 
-    - name: Inicializar DB Airflow (idempotente) via airflow-cli
+    - name: Inicializar DB Airflow (idempotente)
       ansible.builtin.command:
         cmd: docker exec airflow-cli airflow db init
       register: db_init
@@ -443,7 +442,7 @@
       until: db_init.rc == 0
       changed_when: false
 
-    - name: Ejecutar migraciones Airflow (idempotente) via airflow-cli
+    - name: Ejecutar migraciones Airflow (idempotente)
       ansible.builtin.command:
         cmd: docker exec airflow-cli airflow db migrate
       register: db_migrate
@@ -452,34 +451,23 @@
       until: db_migrate.rc == 0
       changed_when: false
 
-    - name: Listar usuarios Airflow via airflow-cli
-      ansible.builtin.command:
-        cmd: docker exec airflow-cli airflow users list
-      register: airflow_users_list
-      changed_when: false
-      failed_when: false
-
-    - name: Crear usuario admin si no existe (via airflow-cli)
-      ansible.builtin.command:
-        cmd: >
-          docker exec airflow-cli airflow users create
-          --username {{ airflow_admin_username_value }}
-          --password {{ airflow_admin_password_value }}
-          --firstname Admin
-          --lastname User
-          --role Admin
-          --email {{ airflow_admin_email_value }}
-      register: admin_create
-      when: >
-        ('No data found' in (airflow_users_list.stdout | default('')))
-        or (airflow_admin_username_value not in (airflow_users_list.stdout | default('')))
-      retries: 5
-      delay: 5
-      until: admin_create.rc == 0
+    - name: Crear usuario admin si no existe
+      ansible.builtin.shell: |
+        set -e
+        if ! docker exec airflow-cli airflow users list | grep -qE '(^|[[:space:]]){{ airflow_admin_username_value }}([[:space:]]|$)'; then
+          docker exec airflow-cli airflow users create \
+            --username {{ airflow_admin_username_value }} \
+            --password {{ airflow_admin_password_value }} \
+            --firstname Admin \
+            --lastname User \
+            --role Admin \
+            --email {{ airflow_admin_email_value }}
+        fi
+      args:
+        executable: /bin/bash
       changed_when: true
-      failed_when: false
 
-    - name: Forzar password del admin (idempotente) via airflow-cli
+    - name: Forzar password del admin (idempotente)
       ansible.builtin.shell: |
         set -e
         docker exec airflow-cli airflow users set-password \
@@ -487,18 +475,14 @@
           --password "{{ airflow_admin_password_value }}"
       args:
         executable: /bin/bash
-      register: admin_set_pw
-      retries: 5
-      delay: 5
-      until: admin_set_pw.rc == 0
       changed_when: true
 
-    - name: Reiniciar webserver y scheduler para tomar DB lista
+    - name: Reiniciar webserver y scheduler para asegurar DB lista
       ansible.builtin.command:
         cmd: docker restart airflow-webserver airflow-scheduler
       changed_when: true
 
-    - name: Esperar que el endpoint /health responda (HTTP real)
+    - name: Esperar que /health responda
       ansible.builtin.shell: |
         set -e
         curl -fsS http://localhost:{{ airflow_port }}/health >/dev/null
@@ -512,17 +496,17 @@
 
     - name: Mostrar URL de Airflow
       ansible.builtin.debug:
-        msg: "Airflow debería estar disponible en: http://{{ ansible_host | default(inventory_hostname) }}:{{ airflow_port }} (user={{ airflow_admin_username_value }})"
+        msg: "Airflow: http://{{ ansible_host | default(inventory_hostname) }}:{{ airflow_port }} (user={{ airflow_admin_username_value }})"
       changed_when: false
 
 
 # ------------------------------------------------------------------------------
-# PLAY 3 (placeholder)
+# PLAY 3: placeholder Kafka/Spark
 # ------------------------------------------------------------------------------
-- name: 36 - Placeholder Kafka/Spark (pendiente definir hosts)
+- name: 36 - Placeholder Kafka/Spark
   hosts: localhost
   gather_facts: false
   tasks:
     - name: Info
       ansible.builtin.debug:
-        msg: "Kafka/Spark no se despliegan en este 36. Dime en qué host van (master/noc/soc) y el stack elegido."
+        msg: "Kafka/Spark no se despliegan en este 36 todavía."
