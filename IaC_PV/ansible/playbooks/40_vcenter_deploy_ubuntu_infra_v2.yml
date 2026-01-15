@@ -1,5 +1,5 @@
 ---
-- name: Crear VMs de infraestructura en vCenter desde PV-INFRA-IaC
+- name: Crear VMs de infraestructura en vCenter desde PV-INFRA-IaC (Tier B)
   hosts: localhost
   gather_facts: false
   connection: local
@@ -10,24 +10,25 @@
   vars:
     infra_ssh_user: "pvinfra"
 
+    # === Tier B MAX ===
     infra_vms:
       - name: pv-infra-master
         ip: "192.168.5.85"
-        cpu: 3
-        memory_mb: 24576
-        disk_gb: 140
+        cpu: 4
+        memory_mb: 16384
+        disk_gb: 160
 
       - name: pv-infra-noc
         ip: "192.168.5.86"
-        cpu: 2
-        memory_mb: 16384
-        disk_gb: 140
+        cpu: 8
+        memory_mb: 32768
+        disk_gb: 500
 
       - name: pv-infra-soc
         ip: "192.168.5.87"
-        cpu: 2
-        memory_mb: 16384
-        disk_gb: 140
+        cpu: 16
+        memory_mb: 65536
+        disk_gb: 2000
 
     vm_source_name: "PV-INFRA-IaC"
     vm_folder: "PV_IaC"
@@ -40,7 +41,55 @@
       - "8.8.8.8"
 
   tasks:
-    - name: Crear/actualizar VMs de infraestructura (clonar template) y ENCENDERLAS
+    #####################################################################
+    # FASE 1: Asegurar que la VM quede APAGADA y aplicar HW/DISK/NET
+    # (Evita cpuHotAdd / memHotAdd)
+    #####################################################################
+    - name: Crear/actualizar VMs de infraestructura (clonar template) y DEJARLAS APAGADAS para aplicar recursos
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+
+        datacenter: "{{ vcenter_datacenter }}"
+        cluster: "{{ vcenter_cluster }}"
+        folder: "{{ vm_folder }}"
+
+        name: "{{ item.name }}"
+        state: poweredoff
+        template: "{{ vm_source_name }}"
+        datastore: "{{ vm_datastore }}"
+
+        # Aplicar Tier B aquí (apagada)
+        hardware:
+          num_cpus: "{{ item.cpu }}"
+          memory_mb: "{{ item.memory_mb }}"
+          scsi: paravirtual
+
+        # Intento de ajustar el disco principal al tamaño deseado
+        # (si el template permite resize; si no, luego te doy variante "2do disco")
+        disk:
+          - size_gb: "{{ item.disk_gb }}"
+            type: thin
+            datastore: "{{ vm_datastore }}"
+
+        networks:
+          - name: "{{ vm_network }}"
+            type: static
+            ip: "{{ item.ip }}"
+            netmask: "{{ vm_netmask }}"
+            gateway: "{{ vm_gateway }}"
+            dns_servers: "{{ vm_dns_servers }}"
+
+        wait_for_ip_address: false
+      loop: "{{ infra_vms }}"
+      delegate_to: localhost
+
+    #####################################################################
+    # FASE 2: Encender (ya con recursos aplicados)
+    #####################################################################
+    - name: Encender VMs ya con Tier B aplicado
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -53,17 +102,6 @@
 
         name: "{{ item.name }}"
         state: poweredon
-        template: "{{ vm_source_name }}"
-        datastore: "{{ vm_datastore }}"
-
-        networks:
-          - name: "{{ vm_network }}"
-            type: static
-            ip: "{{ item.ip }}"
-            netmask: "{{ vm_netmask }}"
-            gateway: "{{ vm_gateway }}"
-            dns_servers: "{{ vm_dns_servers }}"
-
         wait_for_ip_address: false
       loop: "{{ infra_vms }}"
       delegate_to: localhost
@@ -81,9 +119,10 @@
     - name: Mostrar resumen de VMs clonadas
       ansible.builtin.debug:
         msg: >-
-          VM {{ item.name }} clonada desde {{ vm_source_name }}
+          VM {{ item.name }} clonada/actualizada desde {{ vm_source_name }}
           en carpeta {{ vm_folder }}, datastore {{ vm_datastore }},
           IP {{ item.ip }} en {{ vm_network }}.
+          TIER_B => CPU={{ item.cpu }} MEM={{ item.memory_mb }}MB DISK={{ item.disk_gb }}GB
       loop: "{{ infra_vms }}"
 
 # ======================================================================
