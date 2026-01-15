@@ -4,6 +4,9 @@
 #      Kafka (KRaft) + Spark + Kafka UI + Observabilidad en SOC
 ########################################################################
 
+###############################################################################
+# 35 - IBKR en MASTER (VNC)
+###############################################################################
 - name: 35 - Desplegar contenedor IBKR en nodo master (con VNC)
   hosts: pv-infra-master
   become: true
@@ -88,8 +91,9 @@
       args:
         chdir: "{{ ibkr_stack_base }}"
 
-########################################################################
-
+###############################################################################
+# 35 - Airflow plataforma en NOC (Postgres + LocalExecutor + Scheduler + Keys)
+###############################################################################
 - name: 35 - Desplegar Airflow plataforma en NOC (Postgres + LocalExecutor + Scheduler + Keys + Admin asegurado)
   hosts: pv-infra-noc
   become: true
@@ -107,10 +111,14 @@
     airflow_db_password: "{{ airflow_postgres_password | default('airflow') }}"
     airflow_db_name: "{{ airflow_postgres_db | default('airflow') }}"
 
-    # Dónde persistimos keys (para que NO cambien entre redeploys)
+    # Persistencia de keys (NO cambian entre redeploys)
     airflow_env_dir: "{{ airflow_base_dir }}/env"
     airflow_secret_key_file: "{{ airflow_env_dir }}/airflow_webserver_secret_key.txt"
     airflow_fernet_key_file: "{{ airflow_env_dir }}/airflow_fernet_key.txt"
+
+    # Ajuste para evitar OOM en entornos pequeños
+    airflow_webserver_workers: "{{ airflow_webserver_workers | default('1') }}"
+    airflow_shm_size: "{{ airflow_shm_size | default('512m') }}"
 
   tasks:
     - name: Crear carpeta base para stack Airflow
@@ -143,9 +151,8 @@
         - "{{ airflow_base_dir }}/plugins"
 
     ####################################################################
-    # Generación idempotente de AIRFLOW__WEBSERVER__SECRET_KEY y FERNET_KEY
+    # Keys persistentes (idempotente)
     ####################################################################
-
     - name: Verificar si existe AIRFLOW webserver secret key persistente
       ansible.builtin.stat:
         path: "{{ airflow_secret_key_file }}"
@@ -197,9 +204,8 @@
         airflow_fernet_key: "{{ (fernet_key_slurp.content | b64decode).strip() }}"
 
     ####################################################################
-    # Compose Airflow Plataforma
+    # Docker Compose Airflow
     ####################################################################
-
     - name: Crear docker-compose de Airflow (Postgres + LocalExecutor + webserver + scheduler + keys)
       ansible.builtin.copy:
         dest: "{{ airflow_compose_file }}"
@@ -223,6 +229,9 @@
               # Keys persistentes (NO cambian entre redeploys)
               - AIRFLOW__WEBSERVER__SECRET_KEY={{ airflow_webserver_secret_key }}
               - AIRFLOW__CORE__FERNET_KEY={{ airflow_fernet_key }}
+
+              # Reduce consumo / evita OOM en VMs pequeñas
+              - AIRFLOW__WEBSERVER__WORKERS={{ airflow_webserver_workers }}
 
             volumes:
               - ./dags/prod:/opt/airflow/dags/prod
@@ -254,11 +263,13 @@
               container_name: airflow-webserver
               ports:
                 - "8081:8080"
+              shm_size: "{{ airflow_shm_size }}"
               command: webserver
 
             airflow-scheduler:
               <<: *airflow-common
               container_name: airflow-scheduler
+              shm_size: "{{ airflow_shm_size }}"
               command: scheduler
 
           volumes:
@@ -314,6 +325,21 @@
       failed_when: false
       changed_when: airflow_migrate.rc == 0
 
+    - name: Esperar que airflow-webserver esté estable (sin reinicios)
+      ansible.builtin.shell: |
+        set -e
+        r1=$(docker inspect airflow-webserver --format '{{"{{"}}.RestartCount{{"}}"}}')
+        sleep 5
+        r2=$(docker inspect airflow-webserver --format '{{"{{"}}.RestartCount{{"}}"}}')
+        echo "$r1 $r2"
+      args:
+        executable: /bin/bash
+      register: ws_stable
+      retries: 12
+      delay: 5
+      until: ws_stable.stdout.split()[0] == ws_stable.stdout.split()[1]
+      changed_when: false
+
     - name: Listar usuarios Airflow
       ansible.builtin.command:
         cmd: docker exec airflow-webserver airflow users list
@@ -321,19 +347,23 @@
       failed_when: false
       changed_when: false
 
-    - name: Crear usuario admin si no existe
-      ansible.builtin.command: >
-        docker exec airflow-webserver airflow users create
+    - name: Crear usuario admin si no existe (con retries)
+      ansible.builtin.shell: >
+        docker exec airflow-webserver bash -lc
+        "airflow users create
         --username {{ airflow_admin_username | default('admin') }}
         --password {{ airflow_admin_password | default('admin') }}
         --firstname Admin
         --lastname User
         --role Admin
-        --email {{ airflow_admin_email | default('admin@example.com') }}
+        --email {{ airflow_admin_email | default('admin@example.com') }}"
       register: airflow_admin_create
       when: >
         ('No data found' in (airflow_users_list.stdout | default('')))
         or ((airflow_admin_username | default('admin')) not in (airflow_users_list.stdout | default('')))
+      retries: 5
+      delay: 6
+      until: airflow_admin_create.rc == 0 or ("already exists" in (airflow_admin_create.stderr | default('')))
       failed_when: >
         airflow_admin_create.rc != 0
         and "already exists" not in (airflow_admin_create.stderr | default(''))
@@ -357,8 +387,9 @@
       failed_when: false
       changed_when: airflow_restart.rc == 0
 
-########################################################################
-
+###############################################################################
+# 35 - Kafka (KRaft) + Spark + Kafka UI + Observabilidad en SOC
+###############################################################################
 - name: 35 - Desplegar Kafka (KRaft) + Spark + Kafka UI + Observabilidad (SOC)
   hosts: pv-infra-soc
   become: true
@@ -371,7 +402,7 @@
     kafka_cluster_id: "ZHeJ4mbEQqO8SSZ2fEXbFQ"
 
   tasks:
-    - name: Crear carpeta base para stack de streaming / cómputo
+    - name: Crear carpeta base para stack de streaming y cómputo
       ansible.builtin.file:
         path: "{{ streaming_base_dir }}"
         state: directory
