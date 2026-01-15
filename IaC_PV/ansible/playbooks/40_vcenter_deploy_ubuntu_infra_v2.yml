@@ -1,5 +1,5 @@
 ---
-- name: "40v2_4 - Infra VMs Tier B MAX (poweroff -> reconfig/clone -> poweron) sin depender de guest_info"
+- name: Crear VMs de infraestructura en vCenter (Tier B MAX) - estilo original + resize seguro
   hosts: localhost
   gather_facts: false
   connection: local
@@ -10,6 +10,7 @@
   vars:
     infra_ssh_user: "pvinfra"
 
+    # Tier B (MAX)
     infra_vms:
       - name: pv-infra-master
         ip: "192.168.5.85"
@@ -30,7 +31,7 @@
         disk_gb: 2000
 
     vm_source_name: "PV-INFRA-IaC"
-    vm_folder: "PV_IaC"   # donde QUERÉS que queden creadas si no existen
+    vm_folder: "PV_IaC"
     vm_datastore: "PURESTORAGE_PV_X20R4_VOL_1"
     vm_network: "VLAN-5"
     vm_netmask: "255.255.255.0"
@@ -41,27 +42,10 @@
 
   tasks:
     #####################################################################
-    # 1) APAGAR POR NOMBRE (SIN FOLDER) -> así las encuentra aunque estén en otro folder
+    # Paso 1: Asegurar VM apagada y aplicar HW ahí (NO hotadd)
+    # (Si no existe, clona del template, pero queda apagada)
     #####################################################################
-    - name: "Power off (por nombre, sin folder) para evitar cpuHotAdd/memHotAdd"
-      community.vmware.vmware_guest_powerstate:
-        hostname: "{{ vcenter_hostname }}"
-        username: "{{ vcenter_username }}"
-        password: "{{ vcenter_password }}"
-        validate_certs: "{{ vcenter_validate_certs | default(false) }}"
-        datacenter: "{{ vcenter_datacenter }}"
-        name: "{{ item.name }}"
-        state: powered-off
-        force: true
-      loop: "{{ infra_vms }}"
-      delegate_to: localhost
-      failed_when: false   # si no existe, no queremos fallar
-
-    #####################################################################
-    # 2) CLONAR SI NO EXISTE / RECONFIGURAR SI EXISTE (SIEMPRE APAGADA)
-    #    OJO: state=poweredoff garantiza que no intente hotadd
-    #####################################################################
-    - name: "Crear/actualizar VM (clone/reconfig) dejando apagada"
+    - name: "Clonar/actualizar VM y dejarla APAGADA para aplicar CPU/RAM/DISK sin HotAdd"
       community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -76,6 +60,7 @@
         template: "{{ vm_source_name }}"
         datastore: "{{ vm_datastore }}"
 
+        # CLAVE: apagada para evitar cpuHotAdd/memHotAdd
         state: poweredoff
 
         hardware:
@@ -83,9 +68,8 @@
           memory_mb: "{{ item.memory_mb }}"
           scsi: paravirtual
 
-        # Nota: esto intenta crecer el DISCO 1.
-        # Si tu template tiene más discos o no permite resize aquí,
-        # te doy luego la variante "agregar 2do disco" (100% confiable).
+        # Ojo: esto intenta ajustar el DISCO principal al size_gb.
+        # Si tu template no soporta resize aquí, lo cambiamos a "agregar 2do disco".
         disk:
           - size_gb: "{{ item.disk_gb }}"
             type: thin
@@ -102,36 +86,44 @@
       delegate_to: localhost
 
     #####################################################################
-    # 3) ENCENDER
+    # Paso 2: Encender (ya con HW aplicado)
     #####################################################################
-    - name: "Power on VMs"
-      community.vmware.vmware_guest_powerstate:
+    - name: "Encender VMs (ya con Tier B aplicado)"
+      community.vmware.vmware_guest:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs | default(false) }}"
+
         datacenter: "{{ vcenter_datacenter }}"
+        cluster: "{{ vcenter_cluster }}"
+        folder: "{{ vm_folder }}"
+
         name: "{{ item.name }}"
-        state: powered-on
+        state: poweredon
       loop: "{{ infra_vms }}"
       delegate_to: localhost
 
-    #####################################################################
-    # 4) Inventario temporal
-    #####################################################################
-    - name: "Registrar hosts en inventario en memoria"
+    - name: Registrar hosts clonados en inventario en memoria
       ansible.builtin.add_host:
         name: "{{ item.name }}"
-        groups: [ "pv_infra_temp" ]
+        groups:
+          - pv_infra_temp
         ansible_host: "{{ item.ip }}"
         ansible_user: "{{ infra_ssh_user }}"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
       loop: "{{ infra_vms }}"
 
+    - name: Mostrar resumen de VMs
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.name }} => IP={{ item.ip }} | CPU={{ item.cpu }} | MEM={{ item.memory_mb }}MB | DISK={{ item.disk_gb }}GB
+      loop: "{{ infra_vms }}"
+
 # ======================================================================
 # Segundo play: instalar llave SSH y sudo sin contraseña
 # ======================================================================
-- name: "40v2_4 - Bootstrap SSH + sudo nopasswd"
+- name: Instalar llave SSH del nodo PV-INFRA-IaC en VMs
   hosts: pv_infra_temp
   gather_facts: false
   become: true
@@ -141,33 +133,33 @@
     ssh_public_key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_ed25519.pub') }}"
 
   tasks:
-    - name: "Esperar SSH"
+    - name: Esperar a que SSH esté disponible
       ansible.builtin.wait_for:
         host: "{{ ansible_host | default(inventory_hostname) }}"
         port: 22
-        delay: 10
+        delay: 15
         timeout: 900
         state: started
       delegate_to: localhost
 
-    - name: "Pausa corta"
+    - name: Pausa corta
       ansible.builtin.pause:
         seconds: 20
 
-    - name: "Autorizar llave pública"
+    - name: Autorizar llave pública del nodo Ansible
       ansible.posix.authorized_key:
         user: "{{ ansible_user }}"
         state: present
         key: "{{ ssh_public_key }}"
         manage_dir: true
 
-    - name: "Asegurar sudo"
+    - name: Asegurar grupo sudo
       ansible.builtin.user:
         name: "{{ ansible_user }}"
         groups: "sudo"
         append: true
 
-    - name: "Sudo sin contraseña"
+    - name: Sudo sin contraseña
       ansible.builtin.copy:
         dest: "/etc/sudoers.d/99-{{ ansible_user }}-nopasswd"
         content: "{{ ansible_user }} ALL=(ALL) NOPASSWD:ALL\n"
