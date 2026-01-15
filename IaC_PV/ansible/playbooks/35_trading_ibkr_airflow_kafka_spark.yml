@@ -1,7 +1,12 @@
 ---
 ########################################################################
-# 35 - IBKR en MASTER (VNC), Airflow "plataforma" en NOC (Postgres + LocalExecutor + Scheduler + keys persistentes + Admin asegurado),
+# 35 - IBKR en MASTER (VNC), Airflow plataforma en NOC (Postgres + LocalExecutor + Scheduler + keys persistentes + Admin asegurado),
 #      Kafka (KRaft) + Spark + Kafka UI + Observabilidad en SOC
+#
+# Infra (según tus playbooks 20/21):
+# - pv-infra-master: 192.168.5.85 (Portainer Server) + IBKR
+# - pv-infra-noc:    192.168.5.86 (Airflow)
+# - pv-infra-soc:    192.168.5.87 (Kafka/Spark/Obs)
 ########################################################################
 
 ###############################################################################
@@ -19,6 +24,23 @@
     ibkr_compose_file: "{{ ibkr_stack_base }}/docker-compose.yml"
 
   tasks:
+    - name: Detectar comando compose (docker compose v2 o docker-compose v1)
+      ansible.builtin.shell: |
+        set -e
+        if docker compose version >/dev/null 2>&1; then
+          echo "docker compose"
+        else
+          echo "docker-compose"
+        fi
+      args:
+        executable: /bin/bash
+      register: compose_cmd_detect
+      changed_when: false
+
+    - name: Set compose_cmd
+      ansible.builtin.set_fact:
+        compose_cmd: "{{ compose_cmd_detect.stdout.strip() }}"
+
     - name: Crear carpeta base para stack IBKR
       ansible.builtin.file:
         path: "{{ ibkr_stack_base }}"
@@ -55,7 +77,6 @@
         mode: "0644"
         content: |
           version: "3.8"
-
           services:
             ibkr-gateway:
               image: ghcr.io/gnzsnz/ib-gateway:latest
@@ -78,21 +99,21 @@
 
     - name: Detener stack IBKR previo (si existe)
       ansible.builtin.command:
-        cmd: docker-compose -f "{{ ibkr_compose_file }}" down
+        cmd: "{{ compose_cmd }} -f {{ ibkr_compose_file }} down"
       args:
         chdir: "{{ ibkr_stack_base }}"
       register: ibkr_down_result
       failed_when: false
       changed_when: ibkr_down_result.rc == 0
 
-    - name: Desplegar stack IBKR con docker-compose
+    - name: Desplegar stack IBKR con compose
       ansible.builtin.command:
-        cmd: docker-compose -f "{{ ibkr_compose_file }}" up -d
+        cmd: "{{ compose_cmd }} -f {{ ibkr_compose_file }} up -d"
       args:
         chdir: "{{ ibkr_stack_base }}"
 
 ###############################################################################
-# 35 - Airflow plataforma en NOC (fix: usar airflow-cli para admin/migraciones)
+# 35 - Airflow plataforma en NOC (fix: airflow-cli para admin/migraciones)
 ###############################################################################
 - name: 35 - Desplegar Airflow plataforma en NOC (Postgres + LocalExecutor + Scheduler + Keys + Admin asegurado)
   hosts: pv-infra-noc
@@ -114,10 +135,28 @@
     airflow_secret_key_file: "{{ airflow_env_dir }}/airflow_webserver_secret_key.txt"
     airflow_fernet_key_file: "{{ airflow_env_dir }}/airflow_fernet_key.txt"
 
+    # tuning para evitar inestabilidad
     airflow_webserver_workers_value: "1"
     airflow_shm_size_value: "512m"
 
   tasks:
+    - name: Detectar comando compose (docker compose v2 o docker-compose v1)
+      ansible.builtin.shell: |
+        set -e
+        if docker compose version >/dev/null 2>&1; then
+          echo "docker compose"
+        else
+          echo "docker-compose"
+        fi
+      args:
+        executable: /bin/bash
+      register: compose_cmd_detect
+      changed_when: false
+
+    - name: Set compose_cmd
+      ansible.builtin.set_fact:
+        compose_cmd: "{{ compose_cmd_detect.stdout.strip() }}"
+
     - name: Crear carpeta base para stack Airflow
       ansible.builtin.file:
         path: "{{ airflow_base_dir }}"
@@ -148,7 +187,7 @@
         - "{{ airflow_base_dir }}/plugins"
 
     ####################################################################
-    # Keys persistentes
+    # Keys persistentes (sin depender de cryptography en el host)
     ####################################################################
     - name: Verificar si existe AIRFLOW webserver secret key persistente
       ansible.builtin.stat:
@@ -171,13 +210,13 @@
         path: "{{ airflow_fernet_key_file }}"
       register: fernet_key_stat
 
-    - name: Generar AIRFLOW fernet key (solo si no existe)
+    - name: Generar AIRFLOW fernet key urlsafe (solo si no existe)
       ansible.builtin.shell: |
         set -euo pipefail
         umask 077
         python3 - <<'PY' > "{{ airflow_fernet_key_file }}"
-        from cryptography.fernet import Fernet
-        print(Fernet.generate_key().decode())
+        import os, base64
+        print(base64.urlsafe_b64encode(os.urandom(32)).decode())
         PY
         chown {{ airflow_uid }}:{{ airflow_uid }} "{{ airflow_fernet_key_file }}"
         chmod 0600 "{{ airflow_fernet_key_file }}"
@@ -201,7 +240,7 @@
         airflow_fernet_key: "{{ (fernet_key_slurp.content | b64decode).strip() }}"
 
     ####################################################################
-    # Docker Compose Airflow (incluye airflow-cli para operaciones admin)
+    # Compose Airflow Plataforma (incluye airflow-cli para admin/migraciones)
     ####################################################################
     - name: Crear docker-compose de Airflow (Postgres + LocalExecutor + webserver + scheduler + cli + keys)
       ansible.builtin.copy:
@@ -270,7 +309,6 @@
               shm_size: "{{ airflow_shm_size_value }}"
               command: scheduler
 
-            # Contenedor "estable" para ejecutar comandos (migraciones, usuarios, etc.)
             airflow-cli:
               <<: *airflow-common
               container_name: airflow-cli
@@ -285,7 +323,7 @@
             default:
               name: airflow_noc_net
 
-    - name: Eliminar contenedor legacy airflow si existe (evita choque de puerto/red)
+    - name: Eliminar contenedor legacy airflow si existe (evita choques)
       ansible.builtin.command:
         cmd: docker rm -f airflow
       failed_when: false
@@ -293,16 +331,16 @@
 
     - name: Detener stack Airflow previo (si existe) y limpiar orphans
       ansible.builtin.command:
-        cmd: docker-compose -f "{{ airflow_compose_file }}" down --remove-orphans
+        cmd: "{{ compose_cmd }} -f {{ airflow_compose_file }} down --remove-orphans"
       args:
         chdir: "{{ airflow_base_dir }}"
       register: airflow_down_result
       failed_when: false
       changed_when: airflow_down_result.rc == 0
 
-    - name: Desplegar stack Airflow con docker-compose
+    - name: Desplegar stack Airflow con compose
       ansible.builtin.command:
-        cmd: docker-compose -f "{{ airflow_compose_file }}" up -d
+        cmd: "{{ compose_cmd }} -f {{ airflow_compose_file }} up -d"
       args:
         chdir: "{{ airflow_base_dir }}"
 
@@ -324,7 +362,7 @@
       until: cli_status.stdout.strip() == "running"
       changed_when: false
 
-    - name: Esperar que airflow-webserver esté healthy (endpoint /health)
+    - name: Esperar que airflow-webserver esté healthy (/health)
       ansible.builtin.command:
         cmd: docker inspect -f '{{ "{{" }}.State.Health.Status{{ "}}" }}' airflow-webserver
       register: ws_health
@@ -340,18 +378,17 @@
         echo "==== docker ps (airflow) ===="
         docker ps --format "table {{'{{'}}.Names{{'}}'}}\t{{'{{'}}.Status{{'}}'}}\t{{'{{'}}.Ports{{'}}'}}" | egrep "airflow-webserver|airflow-scheduler|airflow-postgres|airflow-cli" || true
         echo ""
-        echo "==== logs airflow-webserver (tail 200) ===="
-        docker logs --tail 200 airflow-webserver || true
+        echo "==== logs airflow-webserver (tail 250) ===="
+        docker logs --tail 250 airflow-webserver || true
         echo ""
-        echo "==== logs airflow-scheduler (tail 200) ===="
-        docker logs --tail 200 airflow-scheduler || true
+        echo "==== logs airflow-scheduler (tail 250) ===="
+        docker logs --tail 250 airflow-scheduler || true
         echo ""
         echo "==== inspect airflow-webserver ===="
         docker inspect airflow-webserver --format 'Status={{"{{"}}.State.Status{{"}}"}} RestartCount={{"{{"}}.RestartCount{{"}}"}} OOMKilled={{"{{"}}.State.OOMKilled{{"}}"}} ExitCode={{"{{"}}.State.ExitCode{{"}}"}} Health={{"{{"}}.State.Health.Status{{"}}"}}'
       args:
         executable: /bin/bash
       when: ws_health.stdout.strip() != "healthy"
-      register: ws_logs_dump
       failed_when: true
       changed_when: false
 
@@ -403,7 +440,7 @@
 
     - name: Reiniciar webserver y scheduler
       ansible.builtin.command:
-        cmd: docker-compose -f "{{ airflow_compose_file }}" restart airflow-webserver airflow-scheduler
+        cmd: "{{ compose_cmd }} -f {{ airflow_compose_file }} restart airflow-webserver airflow-scheduler"
       args:
         chdir: "{{ airflow_base_dir }}"
       register: airflow_restart
@@ -421,10 +458,30 @@
     streaming_base_dir: /opt/stacks/soc/streaming
     streaming_compose_file: "{{ streaming_base_dir }}/docker-compose.yml"
 
+    # SOC real (según tu inventario / playbook 20)
     soc_host_ip: "192.168.5.87"
+
+    # Tu cluster id generado:
     kafka_cluster_id: "ZHeJ4mbEQqO8SSZ2fEXbFQ"
 
   tasks:
+    - name: Detectar comando compose (docker compose v2 o docker-compose v1)
+      ansible.builtin.shell: |
+        set -e
+        if docker compose version >/dev/null 2>&1; then
+          echo "docker compose"
+        else
+          echo "docker-compose"
+        fi
+      args:
+        executable: /bin/bash
+      register: compose_cmd_detect
+      changed_when: false
+
+    - name: Set compose_cmd
+      ansible.builtin.set_fact:
+        compose_cmd: "{{ compose_cmd_detect.stdout.strip() }}"
+
     - name: Crear carpeta base para stack de streaming y cómputo
       ansible.builtin.file:
         path: "{{ streaming_base_dir }}"
@@ -640,15 +697,15 @@
 
     - name: Detener stack Streaming previo (si existe)
       ansible.builtin.command:
-        cmd: docker-compose -f "{{ streaming_compose_file }}" down
+        cmd: "{{ compose_cmd }} -f {{ streaming_compose_file }} down"
       args:
         chdir: "{{ streaming_base_dir }}"
       register: streaming_down_result
       failed_when: false
       changed_when: streaming_down_result.rc == 0
 
-    - name: Desplegar stack Streaming con docker-compose
+    - name: Desplegar stack Streaming con compose
       ansible.builtin.command:
-        cmd: docker-compose -f "{{ streaming_compose_file }}" up -d
+        cmd: "{{ compose_cmd }} -f {{ streaming_compose_file }} up -d"
       args:
         chdir: "{{ streaming_base_dir }}"
