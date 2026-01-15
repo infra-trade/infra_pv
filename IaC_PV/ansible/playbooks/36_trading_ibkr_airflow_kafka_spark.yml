@@ -3,10 +3,6 @@
 # 36 - IBKR en MASTER (VNC)
 #    + Airflow "plataforma" en NOC (Postgres + LocalExecutor + CLI admin estable + Keys persistentes + Admin asegurado)
 #    + Kafka (KRaft) + Spark + Kafka UI + Observabilidad en SOC
-#
-# Requisitos:
-# - Docker + docker-compose v1 o docker compose v2 instalado (playbook 21 ya lo hace)
-# - trading_secrets.yml (vault) con credenciales necesarias
 ########################################################################
 
 #######################################################################
@@ -135,22 +131,18 @@
     airflow_compose_file: "{{ airflow_base_dir }}/docker-compose.yml"
     airflow_uid: "50000"
 
-    # DB creds (ideal: en Vault dentro de trading_secrets.yml)
     airflow_db_user: "{{ airflow_postgres_user | default('airflow') }}"
     airflow_db_password: "{{ airflow_postgres_password | default('airflow') }}"
     airflow_db_name: "{{ airflow_postgres_db | default('airflow') }}"
 
-    # Admin (desde vault idealmente)
     airflow_admin_username: "{{ airflow_admin_username | default('admin') }}"
     airflow_admin_password: "{{ airflow_admin_password | default('admin') }}"
     airflow_admin_email: "{{ airflow_admin_email | default('admin@example.com') }}"
 
-    # Keys persistentes (para que NO cambien entre redeploys)
     airflow_env_dir: "{{ airflow_base_dir }}/env"
     airflow_secret_key_file: "{{ airflow_env_dir }}/airflow_webserver_secret_key.txt"
     airflow_fernet_key_file: "{{ airflow_env_dir }}/airflow_fernet_key.txt"
 
-    # Webserver workers (no templating recursivo)
     airflow_webserver_workers: 1
 
   tasks:
@@ -207,9 +199,6 @@
         - "{{ airflow_base_dir }}/logs"
         - "{{ airflow_base_dir }}/plugins"
 
-    ####################################################################
-    # Keys persistentes: SECRET_KEY y FERNET_KEY
-    ####################################################################
     - name: Verificar si existe AIRFLOW webserver secret key persistente
       ansible.builtin.stat:
         path: "{{ airflow_secret_key_file }}"
@@ -260,9 +249,6 @@
         airflow_webserver_secret_key: "{{ (secret_key_slurp.content | b64decode).strip() }}"
         airflow_fernet_key: "{{ (fernet_key_slurp.content | b64decode).strip() }}"
 
-    ####################################################################
-    # Compose Airflow (incluye airflow-cli siempre arriba para admin)
-    ####################################################################
     - name: Crear docker-compose de Airflow (Postgres + LocalExecutor + webserver + scheduler + cli + keys)
       ansible.builtin.copy:
         dest: "{{ airflow_compose_file }}"
@@ -282,7 +268,6 @@
               - AIRFLOW_UID={{ airflow_uid }}
               - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://{{ airflow_db_user }}:{{ airflow_db_password }}@postgres:5432/{{ airflow_db_name }}
 
-              # Keys persistentes
               - AIRFLOW__WEBSERVER__SECRET_KEY={{ airflow_webserver_secret_key }}
               - AIRFLOW__CORE__FERNET_KEY={{ airflow_fernet_key }}
 
@@ -311,7 +296,6 @@
                 timeout: 5s
                 retries: 10
 
-            # Contenedor estable para comandos administrativos (NO depende del webserver)
             airflow-cli:
               <<: *airflow-common
               container_name: airflow-cli
@@ -384,9 +368,6 @@
       until: cli_state.stdout.strip() == "running"
       changed_when: false
 
-    ####################################################################
-    # Init DB y admin via airflow-cli (estable, evita restarts del webserver)
-    ####################################################################
     - name: Ejecutar migraciones Airflow (idempotente) via airflow-cli
       ansible.builtin.command:
         cmd: docker exec airflow-cli airflow db migrate
@@ -437,8 +418,19 @@
       changed_when: airflow_reset_pwd.rc == 0
 
     - name: Esperar que airflow-webserver esté healthy (healthcheck docker)
-      ansible.builtin.command:
-        cmd: docker inspect -f '{{ "{{" }}.State.Health.Status{{ "}}" }}' airflow-webserver
+      ansible.builtin.shell: |
+        set -e
+        # Si no existe healthcheck, docker inspect devolverá "<no value>" o fallará.
+        hc="$(docker inspect -f '{{ "{{" }}.State.Health.Status{{ "}}" }}' airflow-webserver 2>/dev/null || true)"
+        if [ -z "$hc" ] || [ "$hc" = "<no value>" ]; then
+          # Fallback: probar endpoint /health desde el host
+          curl -fsS http://localhost:8081/health >/dev/null
+          echo "healthy"
+        else
+          echo "$hc"
+        fi
+      args:
+        executable: /bin/bash
       register: ws_health
       retries: 60
       delay: 3
@@ -450,7 +442,10 @@
       ansible.builtin.shell: |
         set -e
         echo "==== docker ps (airflow) ===="
-        docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | egrep "airflow-webserver|airflow-scheduler|airflow-postgres|airflow-cli" || true
+        docker ps | egrep "airflow-webserver|airflow-scheduler|airflow-postgres|airflow-cli" || true
+        echo ""
+        echo "==== docker compose ps (si aplica) ===="
+        (cd "{{ airflow_base_dir }}" && {{ compose_cmd }} -f "{{ airflow_compose_file }}" ps) || true
         echo ""
         echo "==== logs airflow-webserver (tail 250) ===="
         docker logs --tail 250 airflow-webserver || true
@@ -458,8 +453,11 @@
         echo "==== logs airflow-scheduler (tail 250) ===="
         docker logs --tail 250 airflow-scheduler || true
         echo ""
+        echo "==== logs airflow-cli (tail 120) ===="
+        docker logs --tail 120 airflow-cli || true
+        echo ""
         echo "==== inspect airflow-webserver ===="
-        docker inspect airflow-webserver --format 'Status={{.State.Status}} RestartCount={{.RestartCount}} OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}} Health={{.State.Health.Status}}' || true
+        docker inspect airflow-webserver --format 'Status={{ "{{" }}.State.Status{{ "}}" }} RestartCount={{ "{{" }}.RestartCount{{ "}}" }} OOMKilled={{ "{{" }}.State.OOMKilled{{ "}}" }} ExitCode={{ "{{" }}.State.ExitCode{{ "}}" }} Health={{ "{{" }}.State.Health.Status{{ "}}" }}' || true
         exit 1
       args:
         executable: /bin/bash
@@ -482,10 +480,7 @@
     streaming_base_dir: /opt/stacks/soc/streaming
     streaming_compose_file: "{{ streaming_base_dir }}/docker-compose.yml"
 
-    # IMPORTANTE: soc host real
     soc_host_ip: "192.168.5.87"
-
-    # Tu cluster_id KRaft ya generado
     kafka_cluster_id: "ZHeJ4mbEQqO8SSZ2fEXbFQ"
 
   tasks:
@@ -606,15 +601,12 @@
                 KAFKA_PROCESS_ROLES: "broker,controller"
                 KAFKA_NODE_ID: 1
                 KAFKA_CLUSTER_ID: "{{ kafka_cluster_id }}"
-
                 KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
                 KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-
                 KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
                 KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://{{ soc_host_ip }}:9092"
                 KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT"
                 KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
-
                 KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
                 KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
                 KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
